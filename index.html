@@ -222,6 +222,20 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 }
 .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
+.update-banner {
+  position:fixed; left:0; right:0; top:0; z-index:300;
+  padding:calc(10px + env(safe-area-inset-top)) 16px 10px;
+  background:var(--sand-deep); color:var(--cream);
+  font-size:13.5px; display:none; align-items:center; justify-content:center;
+  gap:12px; transform:translateY(-100%); transition:transform .25s;
+}
+.update-banner.show { display:flex; transform:translateY(0); }
+.update-banner button {
+  background:var(--cream); color:var(--text); border:none; border-radius:2px;
+  padding:5px 12px; font-size:13px; font-family:var(--serif); cursor:pointer;
+  flex-shrink:0;
+}
+
 .modal-bg { position:fixed; inset:0; background:rgba(20,20,16,0.4); z-index:150;
   display:none; align-items:flex-end; justify-content:center; }
 .modal-bg.show { display:flex; }
@@ -583,6 +597,11 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 
 <div class="toast" id="toast"></div>
 
+<div class="update-banner" id="update-banner">
+  <span>A newer version is available.</span>
+  <button type="button" id="update-reload">Update</button>
+</div>
+
 <div class="modal-bg" id="modal-bg">
   <div class="modal">
     <h3 id="modal-title"></h3>
@@ -598,6 +617,40 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 
 <script>
 'use strict';
+
+/* ══════════════════ UPDATE CHECK ══════════════════
+   Bump this string on every deploy. Exists because a home-screen "Add to Home
+   Screen" install keeps its own snapshot and — unlike a normal browser tab —
+   doesn't naturally notice a new deploy on its own. A plain browser tab will
+   also pick this up, just less critically since a manual reload fixes it there.
+   No service worker involved; this just periodically re-fetches this same
+   page with the browser cache bypassed and compares versions. */
+const APP_VERSION = '2026-07-25.1';
+let lastUpdateCheck = 0;
+async function checkForUpdate() {
+  const now = Date.now();
+  if (now - lastUpdateCheck < 5 * 60 * 1000) return;   // at most once every 5 min
+  lastUpdateCheck = now;
+  try {
+    const res = await fetch(location.pathname + '?_v=' + now, { cache: 'no-store' });
+    const html = await res.text();
+    const m = html.match(/const APP_VERSION = '([^']+)'/);
+    if (m && m[1] !== APP_VERSION) {
+      const el = document.getElementById('update-banner');
+      if (el) el.classList.add('show');
+    }
+  } catch { /* offline or blocked — say nothing, this is a courtesy check only */ }
+}
+{ const btn = document.getElementById('update-reload');
+  if (btn) btn.onclick = () => location.reload(); }
+/* Deliberately not checked on the very first script evaluation — a page that
+   just loaded fresh from the network is already current by definition. The
+   gap this closes is a tab or home-screen install waking back up without a
+   real network fetch, which 'pageshow' and 'visibilitychange' both cover. */
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) checkForUpdate();
+});
+window.addEventListener('pageshow', checkForUpdate);
 
 /* ══════════════════ LAB DEFINITIONS ══════════════════
    Default reference ranges reflect commonly published adult
