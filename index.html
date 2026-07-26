@@ -179,6 +179,12 @@ tr:last-child td { border-bottom:none; }
 .log-title { font-size:15px; }
 .log-meta { font-size:13px; color:var(--muted); margin-top:2px; word-wrap:break-word; line-height:1.5; }
 .log-del { color:var(--muted); font-size:19px; line-height:1; padding:2px 5px; flex-shrink:0; }
+.form-group { font-size:10px; letter-spacing:.15em; text-transform:uppercase;
+  color:var(--muted); margin:22px 0 10px; padding-bottom:6px; border-bottom:1px solid var(--border); }
+.form-group:first-of-type { margin-top:10px; }
+.lab-group td { padding:18px 0 6px; font-size:10px; letter-spacing:.15em;
+  text-transform:uppercase; color:var(--muted); border-bottom:1px solid var(--border); }
+tbody tr.lab-group:first-child td { padding-top:4px; }
 .sub-item { display:flex; justify-content:space-between; align-items:flex-start; gap:10px;
   font-size:13px; color:var(--muted); line-height:1.5; padding:3px 0; }
 .sub-item .log-del { font-size:16px; padding:0 3px; }
@@ -592,22 +598,75 @@ tr:last-child td { border-bottom:none; }
    values. They are editable per user so the flag always
    reflects the range printed on that person's own report. */
 const LAB_FIELDS = [
-  { k:'ldl_mgdl',   label:'LDL-C',        unit:'mg/dL',  min:null, max:100 },
-  { k:'hdl_mgdl',   label:'HDL-C',        unit:'mg/dL',  min:40,   max:null, minF:50 },
-  { k:'non_hdl_mgdl', label:'Non-HDL',    unit:'mg/dL',  min:null, max:130 },
-  { k:'apob_mgdl',  label:'ApoB',         unit:'mg/dL',  min:null, max:90  },
-  { k:'lpa_nmol',   label:'Lp(a)',        unit:'nmol/L', min:null, max:75  },
-  { k:'total_cholesterol_mgdl', label:'Total cholesterol', unit:'mg/dL', min:null, max:200 },
-  { k:'triglycerides_mgdl', label:'Triglycerides', unit:'mg/dL', min:null, max:150 },
-  { k:'hscrp_mgl',  label:'hsCRP',        unit:'mg/L',   min:null, max:1.0 },
-  { k:'glucose_mgdl', label:'Glucose',    unit:'mg/dL',  min:65,   max:99  },
-  { k:'hba1c_pct',  label:'HbA1c',        unit:'%',      min:null, max:5.7 },
-  { k:'testosterone_ng_dl', label:'Testosterone', unit:'ng/dL', min:250, max:1100, minF:15, maxF:70 },
-  { k:'alt_ul',     label:'ALT',          unit:'U/L',    min:9,    max:46, maxF:33 },
-  { k:'ast_ul',     label:'AST',          unit:'U/L',    min:10,   max:35 },
-  { k:'tsh_miul',   label:'TSH',          unit:'mIU/L',  min:0.40, max:4.50 },
-  { k:'uric_acid_mgdl', label:'Uric acid', unit:'mg/dL', min:4.0,  max:8.0, minF:2.5, maxF:7.0 }
+  /* Grouped by panel, in the order they tend to appear on a Quest report.
+     Default ranges are the ones Quest prints; female variants (minF/maxF) are
+     given only where the adult range is well established and not cycle-
+     dependent. Where it varies too much to state safely, the range is left
+     null — no range means no flag, and the patient can enter their own. */
+
+  // ── Lipids & cardiovascular ──
+  { k:'total_cholesterol_mgdl', g:'Lipids & cardiovascular', label:'Total cholesterol', unit:'mg/dL', min:null, max:200 },
+  { k:'ldl_mgdl',        g:'Lipids & cardiovascular', label:'LDL-C',            unit:'mg/dL',  min:null, max:100 },
+  { k:'hdl_mgdl',        g:'Lipids & cardiovascular', label:'HDL-C',            unit:'mg/dL',  min:40,   max:null, minF:50 },
+  { k:'non_hdl_mgdl',    g:'Lipids & cardiovascular', label:'Non-HDL',          unit:'mg/dL',  min:null, max:130 },
+  { k:'triglycerides_mgdl', g:'Lipids & cardiovascular', label:'Triglycerides', unit:'mg/dL',  min:null, max:150 },
+  { k:'chol_hdl_ratio',  g:'Lipids & cardiovascular', label:'Chol/HDL ratio',   unit:'ratio',  min:null, max:5.0 },
+  { k:'apob_mgdl',       g:'Lipids & cardiovascular', label:'ApoB',             unit:'mg/dL',  min:null, max:90 },
+  { k:'lpa_nmol',        g:'Lipids & cardiovascular', label:'Lp(a)',            unit:'nmol/L', min:null, max:75 },
+
+  // ── Inflammation ──
+  { k:'hscrp_mgl',       g:'Inflammation', label:'hsCRP',        unit:'mg/L',   min:null, max:1.0 },
+  { k:'homocysteine_umol', g:'Inflammation', label:'Homocysteine', unit:'µmol/L', min:null, max:13.5 },
+
+  // ── Metabolic ──
+  { k:'glucose_mgdl',    g:'Metabolic', label:'Glucose (fasting)', unit:'mg/dL', min:65,  max:99 },
+  { k:'hba1c_pct',       g:'Metabolic', label:'HbA1c',             unit:'%',     min:null, max:5.7 },
+  { k:'uric_acid_mgdl',  g:'Metabolic', label:'Uric acid',         unit:'mg/dL', min:4.0, max:8.0, minF:2.5, maxF:7.0 },
+
+  // ── Kidney ──
+  { k:'bun_mgdl',        g:'Kidney', label:'BUN',        unit:'mg/dL',        min:7,    max:25 },
+  { k:'creatinine_mgdl', g:'Kidney', label:'Creatinine', unit:'mg/dL',        min:0.60, max:1.26, minF:0.50, maxF:1.10 },
+  { k:'egfr',            g:'Kidney', label:'eGFR',       unit:'mL/min/1.73m²', min:60,  max:null },
+
+  // ── Electrolytes & minerals ──
+  { k:'sodium_mmol',     g:'Electrolytes & minerals', label:'Sodium',    unit:'mmol/L', min:135, max:146 },
+  { k:'potassium_mmol',  g:'Electrolytes & minerals', label:'Potassium', unit:'mmol/L', min:3.5, max:5.3 },
+  { k:'chloride_mmol',   g:'Electrolytes & minerals', label:'Chloride',  unit:'mmol/L', min:98,  max:110 },
+  { k:'co2_mmol',        g:'Electrolytes & minerals', label:'CO₂',       unit:'mmol/L', min:20,  max:32 },
+  { k:'calcium_mgdl',    g:'Electrolytes & minerals', label:'Calcium',   unit:'mg/dL',  min:8.6, max:10.3 },
+
+  // ── Liver & protein ──
+  { k:'alt_ul',              g:'Liver & protein', label:'ALT',             unit:'U/L',  min:9,   max:46, maxF:33 },
+  { k:'ast_ul',              g:'Liver & protein', label:'AST',             unit:'U/L',  min:10,  max:40 },
+  { k:'alp_ul',              g:'Liver & protein', label:'Alkaline phosphatase', unit:'U/L', min:36, max:130 },
+  { k:'bilirubin_total_mgdl',g:'Liver & protein', label:'Bilirubin, total',unit:'mg/dL',min:0.2, max:1.2 },
+  { k:'protein_total_gdl',   g:'Liver & protein', label:'Protein, total',  unit:'g/dL', min:6.1, max:8.1 },
+  { k:'albumin_gdl',         g:'Liver & protein', label:'Albumin',         unit:'g/dL', min:3.6, max:5.1 },
+  { k:'globulin_gdl',        g:'Liver & protein', label:'Globulin',        unit:'g/dL', min:1.9, max:3.7 },
+  { k:'ag_ratio',            g:'Liver & protein', label:'A/G ratio',       unit:'ratio',min:1.0, max:2.5 },
+
+  // ── Iron ──
+  { k:'ferritin_ngml',   g:'Iron', label:'Ferritin',        unit:'ng/mL',  min:38,  max:380, minF:10, maxF:232 },
+  { k:'iron_mcgdl',      g:'Iron', label:'Iron, total',     unit:'mcg/dL', min:50,  max:180, minF:40, maxF:190 },
+  { k:'tibc_mcgdl',      g:'Iron', label:'Iron binding capacity', unit:'mcg/dL', min:250, max:425 },
+  { k:'iron_sat_pct',    g:'Iron', label:'Iron saturation', unit:'%',      min:20,  max:48 },
+
+  // ── Hormones ──
+  { k:'testosterone_ng_dl',      g:'Hormones', label:'Testosterone, total',        unit:'ng/dL', min:250, max:1100, minF:15, maxF:70 },
+  { k:'testosterone_free_pgml',  g:'Hormones', label:'Testosterone, free',         unit:'pg/mL', min:46.0, max:224.0, minF:null, maxF:null },
+  { k:'testosterone_bio_ngdl',   g:'Hormones', label:'Testosterone, bioavailable', unit:'ng/dL', min:110.0, max:575.0, minF:null, maxF:null },
+  { k:'shbg_nmol',       g:'Hormones', label:'SHBG',      unit:'nmol/L', min:10, max:50, minF:17, maxF:124 },
+  { k:'estradiol_pgml',  g:'Hormones', label:'Estradiol', unit:'pg/mL',  min:null, max:29, minF:null, maxF:null },
+  { k:'dheas_mcgdl',     g:'Hormones', label:'DHEA-S',    unit:'mcg/dL', min:93, max:415, minF:35, maxF:430 },
+  { k:'fsh_miuml',       g:'Hormones', label:'FSH',       unit:'mIU/mL', min:1.4, max:12.8, minF:null, maxF:null },
+  { k:'lh_miuml',        g:'Hormones', label:'LH',        unit:'mIU/mL', min:1.5, max:9.3, minF:null, maxF:null },
+
+  // ── Thyroid ──
+  { k:'tsh_miul',        g:'Thyroid', label:'TSH', unit:'mIU/L', min:0.40, max:4.50 },
 ];
+
+/* Panel order for display, derived from the field list. */
+const LAB_GROUPS = [...new Set(LAB_FIELDS.map(f => f.g))];
 
 function defaultRanges(sex) {
   const out = {};
@@ -977,7 +1036,8 @@ function buildLabs() {
   if (!labs.length) { el.innerHTML = '<p class="empty">No results recorded yet.</p>'; return; }
   let anyFlag = false;
   const heads = labs.map(l => '<th style="text-align:right">' + fmtDate(l.date) + '</th>').join('');
-  const rows = LAB_FIELDS.map(f => {
+
+  const rowFor = f => {
     if (!labs.some(l => l[f.k] != null)) return '';
     const cells = labs.map(l => {
       const v = l[f.k];
@@ -991,10 +1051,18 @@ function buildLabs() {
       ' <span class="pill">' + f.unit + '</span></td>' + cells +
       '<td style="white-space:nowrap;color:var(--muted);font-size:13px;padding-left:18px">' +
       rangeText(f.k) + '</td></tr>';
+  };
+
+  /* Only show a panel heading if something in that panel was actually measured. */
+  const span = labs.length + 2;
+  const body = LAB_GROUPS.map(g => {
+    const rows = LAB_FIELDS.filter(f => f.g === g).map(rowFor).filter(Boolean).join('');
+    if (!rows) return '';
+    return '<tr class="lab-group"><td colspan="' + span + '">' + g + '</td></tr>' + rows;
   }).filter(Boolean).join('');
 
   el.innerHTML = '<div class="scroll-x"><table><thead><tr><th>Marker</th>' + heads +
-    '<th style="padding-left:18px">Reference</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
+    '<th style="padding-left:18px">Reference</th></tr></thead><tbody>' + body + '</tbody></table></div>' +
     '<div class="hint">' +
     (anyFlag ? '<span class="flagged">◆</span> outside the reference range shown. ' : '') +
     'Reference ranges are editable in Settings and should match those printed on your own report. ' +
@@ -1086,10 +1154,14 @@ const MODALS = {
     }),
 
   labs: () => openModal('Laboratory','Enter the values from your report. Leave blank anything you don’t have.',
-    dateField('m-date') + '<div class="field-row">' +
-    LAB_FIELDS.map(f => '<label class="field"><span>' + f.label + ' (' + f.unit + ')</span>' +
-      '<input type="number" step="0.01" inputmode="decimal" id="lab-' + f.k + '"></label>').join('') +
-    '</div><label class="field"><span>Note</span><input type="text" id="m-notes"></label>',
+    dateField('m-date') +
+    LAB_GROUPS.map(g =>
+      '<div class="form-group">' + g + '</div><div class="field-row">' +
+      LAB_FIELDS.filter(f => f.g === g).map(f =>
+        '<label class="field"><span>' + f.label + ' (' + f.unit + ')</span>' +
+        '<input type="number" step="0.01" inputmode="decimal" id="lab-' + f.k + '"></label>').join('') +
+      '</div>').join('') +
+    '<label class="field"><span>Note</span><input type="text" id="m-notes"></label>',
     () => {
       const rec = { date:$('m-date').value||today(), notes:$('m-notes').value||'' };
       let any = false;
@@ -1252,11 +1324,24 @@ Return ONLY a JSON object, no markdown fences, no commentary:
   "kind": "labs" | "dexa" | "weights" | "unknown",
   "date": "YYYY-MM-DD" | null,
   "approximate": boolean,
-  "labs": { "ldl_mgdl": number|null, "hdl_mgdl": number|null, "non_hdl_mgdl": number|null,
-            "apob_mgdl": number|null, "lpa_nmol": number|null, "total_cholesterol_mgdl": number|null,
-            "triglycerides_mgdl": number|null, "hscrp_mgl": number|null, "glucose_mgdl": number|null,
-            "hba1c_pct": number|null, "testosterone_ng_dl": number|null, "alt_ul": number|null,
-            "ast_ul": number|null, "tsh_miul": number|null, "uric_acid_mgdl": number|null } | null,
+  "labs": { "total_cholesterol_mgdl": number|null, "ldl_mgdl": number|null, "hdl_mgdl": number|null,
+            "non_hdl_mgdl": number|null, "triglycerides_mgdl": number|null, "chol_hdl_ratio": number|null,
+            "apob_mgdl": number|null, "lpa_nmol": number|null,
+            "hscrp_mgl": number|null, "homocysteine_umol": number|null,
+            "glucose_mgdl": number|null, "hba1c_pct": number|null, "uric_acid_mgdl": number|null,
+            "bun_mgdl": number|null, "creatinine_mgdl": number|null, "egfr": number|null,
+            "sodium_mmol": number|null, "potassium_mmol": number|null, "chloride_mmol": number|null,
+            "co2_mmol": number|null, "calcium_mgdl": number|null,
+            "alt_ul": number|null, "ast_ul": number|null, "alp_ul": number|null,
+            "bilirubin_total_mgdl": number|null, "protein_total_gdl": number|null,
+            "albumin_gdl": number|null, "globulin_gdl": number|null, "ag_ratio": number|null,
+            "ferritin_ngml": number|null, "iron_mcgdl": number|null, "tibc_mcgdl": number|null,
+            "iron_sat_pct": number|null,
+            "testosterone_ng_dl": number|null, "testosterone_free_pgml": number|null,
+            "testosterone_bio_ngdl": number|null, "shbg_nmol": number|null,
+            "estradiol_pgml": number|null, "dheas_mcgdl": number|null,
+            "fsh_miuml": number|null, "lh_miuml": number|null,
+            "tsh_miul": number|null } | null,
   "dexa": { "weight_lbs": number|null, "body_fat_pct": number|null, "lean_mass_lbs": number|null,
             "fat_mass_lbs": number|null, "vat_kg": number|null, "rmr_cal": number|null } | null,
   "weights": [ { "date": "YYYY-MM-DD", "weight_lbs": number|null, "waist_inches": number|null } ] | null,
@@ -1270,6 +1355,9 @@ Rules:
 - If the image is a CHART or GRAPH rather than printed numbers, set "approximate" to true and read
   only the points you can identify confidently from the axes. Otherwise set "approximate" to false.
 - For a list or table of weigh-ins, use "weights" with one object per row.
+- Include every analyte listed in the schema that appears on the document. A full panel often
+  spans several pages — read all of them. Ignore urinalysis dipstick results and any qualitative
+  (non-numeric) findings; they have no field here.
 - If the document contains results from several different collection dates, transcribe only the
   most recent one, and say clearly in "note" how many other dates are present so they can be added separately.
 - Ignore names, dates of birth, addresses, and record numbers entirely. Never include them anywhere in your response.
@@ -1498,16 +1586,18 @@ function showImageConfirm(p) {
 
 /* ══════════════════ SETTINGS ══════════════════ */
 function buildRefEditor() {
-  $('ref-editor').innerHTML = '<div class="scroll-x"><table><thead><tr>' +
-    '<th>Marker</th><th style="text-align:right">Low</th><th style="text-align:right">High</th></tr></thead><tbody>' +
-    LAB_FIELDS.map(f => {
+  $('ref-editor').innerHTML = LAB_GROUPS.map(g =>
+    '<div class="form-group">' + g + '</div>' +
+    '<div class="scroll-x"><table><thead><tr><th>Marker</th>' +
+    '<th style="text-align:right">Low</th><th style="text-align:right">High</th></tr></thead><tbody>' +
+    LAB_FIELDS.filter(f => f.g === g).map(f => {
       const r = DATA.refRanges[f.k] || {};
       return '<tr><td style="white-space:nowrap">' + f.label + ' <span class="pill">' + f.unit + '</span></td>' +
         '<td><input type="number" step="0.01" inputmode="decimal" id="rl-' + f.k + '" value="' +
           (r.min != null ? r.min : '') + '" placeholder="—" style="padding:7px 9px;text-align:right"></td>' +
         '<td><input type="number" step="0.01" inputmode="decimal" id="rh-' + f.k + '" value="' +
           (r.max != null ? r.max : '') + '" placeholder="—" style="padding:7px 9px;text-align:right"></td></tr>';
-    }).join('') + '</tbody></table></div>';
+    }).join('') + '</tbody></table></div>').join('');
 }
 
 function fillSettings() {
