@@ -377,15 +377,6 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
     <!-- ── DASHBOARD ── -->
     <section class="view active" id="view-dash">
             <div class="panel">
-        <div class="panel-header">
-          <div><div class="panel-title">Weight</div><div class="panel-sub" id="chart-sub"></div></div>
-          <span class="panel-badge">All time</span>
-        </div>
-        <div class="chart-wrap"><canvas id="weightChart"></canvas></div>
-        <div id="chart-empty" class="empty" style="display:none">No entries yet.</div>
-      </div>
-
-      <div class="panel">
         <div class="panel-header"><div class="panel-title">Nutrition</div><span class="panel-badge">Recent</span></div>
         <div id="nutrition-content"></div>
       </div>
@@ -393,6 +384,15 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
       <div class="panel">
         <div class="panel-header"><div class="panel-title">Movement</div><span class="panel-badge">Recent</span></div>
         <div id="workout-content"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header">
+          <div><div class="panel-title">Weight</div><div class="panel-sub" id="chart-sub"></div></div>
+          <span class="panel-badge">All time</span>
+        </div>
+        <div class="chart-wrap"><canvas id="weightChart"></canvas></div>
+        <div id="chart-empty" class="empty" style="display:none">No entries yet.</div>
       </div>
 
       <div class="stat-grid">
