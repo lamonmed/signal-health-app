@@ -505,15 +505,19 @@ tr:last-child td { border-bottom:none; }
         <div class="panel-header"><div class="panel-title">Interpretation</div></div>
         <div class="notice">
           Quick entry and document reading send what you provide — the text you type, or the
-          PDF or image you choose — to Anthropic's API to be turned into numbers. Both use
-          <strong>your own API key</strong>, stored only on this device, and nothing is saved
-          until you confirm it. Leave the key blank and everything still works; enter data
-          directly instead.
+          PDF or image you choose — to be turned into numbers. With a practice code this passes
+          through your practice's service to Anthropic and is <strong>not stored</strong> along
+          the way; with your own key it goes straight to Anthropic. Either way your health
+          record stays on this device, and nothing is saved until you confirm it. Leave both
+          blank and everything still works — enter data directly instead.
         </div>
         <button class="btn btn-block" id="s-setup-wiz">Walk me through setting this up</button>
-        <div class="hint" style="margin-bottom:18px">Step by step, in plain language. Takes about five minutes.</div>
+        <div class="hint" style="margin-bottom:18px" id="s-setup-hint"></div>
         <div class="divider"></div>
-        <label class="field"><span>Anthropic API key</span>
+        <label class="field" id="s-code-field"><span>Practice code</span>
+          <input type="text" id="s-code" placeholder="SHP-0000-0000" autocomplete="off"
+                 autocapitalize="characters" spellcheck="false"></label>
+        <label class="field"><span>Anthropic API key <span style="text-transform:none;letter-spacing:0">— only if you’re using your own</span></span>
           <input type="password" id="s-apikey" placeholder="sk-ant-…" autocomplete="off"></label>
         <label class="field"><span>Model</span>
           <select id="s-model">
@@ -616,6 +620,13 @@ function defaultRanges(sex) {
   return out;
 }
 
+/* ══════════════════ CONFIGURATION ══════════════════
+
+   Paste your Cloudflare Worker URL between the quotes to switch the app to
+   practice codes. Leave it empty and the app falls back to asking each
+   person for their own Anthropic key.                                      */
+const PROXY_URL = 'https://signal-health-proxy.lamonmed.workers.dev';
+
 /* ══════════════════ STORAGE ══════════════════ */
 const KEY = 'signalhealth_v1';
 
@@ -631,7 +642,7 @@ function blankData() {
     },
     refRanges: defaultRanges(''),
     bodyComposition:[], dexa:[], nutrition:[], workouts:[], labs:[],
-    settings:{ apiKey:'', model:'claude-sonnet-5' }
+    settings:{ practiceCode:'', apiKey:'', model:'claude-sonnet-5' }
   };
 }
 
@@ -1126,42 +1137,14 @@ Rules:
 Text to convert:
 `;
 
-async function callClaude(text) {
-  const key = DATA.settings.apiKey;
-  if (!key) throw new Error('no-key');
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
-    method:'POST',
-    headers:{ 'content-type':'application/json', 'x-api-key':key,
-      'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
-    body: JSON.stringify({ model: DATA.settings.model || 'claude-sonnet-5',
-      max_tokens:700, messages:[{ role:'user', content:PARSE_PROMPT + text }] })
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(()=> '');
-    if (res.status === 401) throw new Error('bad-key');
-    throw new Error('API ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
-  }
-  const json = await res.json();
-  let out = (json.content||[]).map(c => c.text||'').join('').trim();
-  out = out.replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
-  const s = out.indexOf('{'), e = out.lastIndexOf('}');
-  if (s === -1 || e === -1) throw new Error('Could not read the response');
-  return JSON.parse(out.slice(s, e+1));
-}
-
 $('nl-parse').onclick = async () => {
   const text = $('nl-input').value.trim();
   if (!text) { toast('Describe a meal or a workout first'); return; }
-  if (!DATA.settings.apiKey) { openWiz(0); return; }
+  if (inferenceMode() === 'none') { openWiz(0); return; }
   const btn = $('nl-parse');
   btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Reading…';
-  try { showConfirm(await callClaude(text), text); }
-  catch (err) {
-    if (err.message === 'bad-key') toast('API key rejected — check Settings');
-    else if (err.message === 'no-key') toast('Add an API key in Settings');
-    else toast(err.message.startsWith('API') ? err.message : 'Could not interpret that — enter it directly');
-    console.error(err);
-  }
+  try { showConfirm(await runInference('text', text), text); }
+  catch (err) { reportInferenceError(err, 'Could not interpret that — enter it directly'); }
   finally { btn.disabled = false; btn.textContent = 'Interpret'; }
 };
 
@@ -1281,53 +1264,102 @@ Rules:
 - If you cannot tell what the document shows, set "kind" to "unknown" and everything else to null.
 - "note" briefly states what the document appeared to be, plus anything unclear or unreadable.`;
 
-/* Build the content block the API expects — a document block for PDFs,
-   an image block for everything else. */
+/* How is this person set up? A practice code routes through the practice's
+   server; a personal key talks to Anthropic directly. */
+function inferenceMode() {
+  if (PROXY_URL && DATA.settings.practiceCode) return 'proxy';
+  if (DATA.settings.apiKey) return 'direct';
+  return 'none';
+}
+
+/* Reduce a file to what either path needs: base64 plus its media type. */
 async function prepareSource(file) {
   if (file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '')) {
     if (file.size > MAX_PDF_BYTES) {
       throw new Error('That PDF is over 20 MB — try splitting it, or screenshot the page you need');
     }
-    return { type:'document',
-      source:{ type:'base64', media_type:'application/pdf', data: await fileToBase64(file) } };
+    return { mediaType:'application/pdf', data: await fileToBase64(file), isPdf:true };
   }
   const img = await downscaleImage(file);
-  return { type:'image', source:{ type:'base64', media_type:img.mediaType, data:img.data } };
+  return { mediaType: img.mediaType, data: img.data, isPdf:false };
 }
 
-async function callClaudeDoc(block) {
-  const key = DATA.settings.apiKey;
-  if (!key) throw new Error('no-key');
+function extractJSON(text) {
+  let out = (text || '').trim().replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
+  const a = out.indexOf('{'), b = out.lastIndexOf('}');
+  if (a === -1 || b === -1) throw new Error('Could not read the response');
+  return JSON.parse(out.slice(a, b+1));
+}
+
+/* ── Route A: through the practice's proxy ── */
+async function viaProxy(kind, payload) {
+  let res;
+  try {
+    res = await fetch(PROXY_URL, {
+      method:'POST', headers:{ 'content-type':'application/json' },
+      body: JSON.stringify({ code: DATA.settings.practiceCode, kind, payload })
+    });
+  } catch { throw new Error('Could not reach your practice’s service. Check your connection.'); }
+
+  let body = {};
+  try { body = await res.json(); } catch {}
+  if (!res.ok) {
+    if (res.status === 401 || res.status === 403) throw new Error('code-invalid');
+    if (res.status === 429) throw new Error(body.message || 'You’ve reached today’s limit.');
+    throw new Error(body.message || 'That didn’t work just now. You can still enter data by hand.');
+  }
+  return body.result;
+}
+
+/* ── Route B: straight to Anthropic with the person's own key ── */
+async function viaDirect(kind, payload) {
+  const content = kind === 'text'
+    ? [{ type:'text', text: PARSE_PROMPT + payload }]
+    : [{ type: payload.isPdf ? 'document' : 'image',
+         source:{ type:'base64', media_type:payload.mediaType, data:payload.data } },
+       { type:'text', text: VISION_PROMPT }];
+
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
-    headers:{ 'content-type':'application/json', 'x-api-key':key,
+    headers:{ 'content-type':'application/json', 'x-api-key':DATA.settings.apiKey,
       'anthropic-version':'2023-06-01', 'anthropic-dangerous-direct-browser-access':'true' },
-    body: JSON.stringify({
-      model: DATA.settings.model || 'claude-sonnet-5',
-      max_tokens: 1600,
-      /* document/image first, then the instruction — recommended ordering */
-      messages:[{ role:'user', content:[ block, { type:'text', text:VISION_PROMPT } ] }]
-    })
+    body: JSON.stringify({ model: DATA.settings.model || 'claude-sonnet-5',
+      max_tokens: kind === 'text' ? 700 : 1600, messages:[{ role:'user', content }] })
   });
   if (!res.ok) {
-    const body = await res.text().catch(()=> '');
+    const t = await res.text().catch(()=> '');
     if (res.status === 401) throw new Error('bad-key');
     if (res.status === 413) throw new Error('That file is too large — try splitting it or sending a screenshot');
-    if (res.status === 400 && /encrypt|password/i.test(body)) {
+    if (res.status === 400 && /encrypt|password/i.test(t)) {
       throw new Error('That PDF is password-protected — remove the password, or send a screenshot');
     }
-    throw new Error('API ' + res.status + (body ? ': ' + body.slice(0,120) : ''));
+    throw new Error('API ' + res.status + (t ? ': ' + t.slice(0,120) : ''));
   }
   const json = await res.json();
-  let out = (json.content||[]).map(c => c.text||'').join('').trim();
-  out = out.replace(/^```(?:json)?/i,'').replace(/```$/,'').trim();
-  const s = out.indexOf('{'), e = out.lastIndexOf('}');
-  if (s === -1 || e === -1) throw new Error('Could not read the response');
-  return JSON.parse(out.slice(s, e+1));
+  return extractJSON((json.content||[]).map(c => c.text||'').join(''));
+}
+
+function reportInferenceError(err, fallback) {
+  const m = err && err.message || '';
+  if (m === 'code-invalid') {
+    DATA.settings.practiceCode = ''; save();
+    toast('Your practice code is no longer valid — please re-enter it');
+    openWiz(0);
+  }
+  else if (m === 'bad-key') toast('API key rejected — check Settings');
+  else if (m === 'not-configured') openWiz(0);
+  else toast(m && !m.startsWith('API ') ? m : (m || fallback));
+  if (m) console.error(err);
+}
+
+async function runInference(kind, payload) {
+  const mode = inferenceMode();
+  if (mode === 'none') throw new Error('not-configured');
+  return mode === 'proxy' ? viaProxy(kind, payload) : viaDirect(kind, payload);
 }
 
 $('img-pick').onclick = () => {
-  if (!DATA.settings.apiKey) { openWiz(0); return; }
+  if (inferenceMode() === 'none') { openWiz(0); return; }
   $('img-file').click();
 };
 
@@ -1342,12 +1374,9 @@ $('img-file').onchange = async e => {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Reading ' + (isPdf ? 'PDF' : 'image') + '…';
   try {
-    showImageConfirm(await callClaudeDoc(await prepareSource(file)));
+    showImageConfirm(await runInference('document', await prepareSource(file)));
   } catch (err) {
-    if (err.message === 'bad-key') toast('API key rejected — check Settings');
-    else if (err.message === 'no-key') toast('Add an API key in Settings');
-    else toast(err.message.startsWith('API') ? err.message : err.message || 'Could not read that file');
-    console.error(err);
+    reportInferenceError(err, 'Could not read that file');
   } finally {
     btn.disabled = false; btn.textContent = 'Choose PDF or image';
   }
@@ -1481,15 +1510,22 @@ function fillSettings() {
   $('s-sex').value = DATA.profile.sex || '';
   $('s-apikey').value = DATA.settings.apiKey || '';
   $('s-model').value = DATA.settings.model || 'claude-sonnet-5';
-  const hasKey = !!DATA.settings.apiKey;
-  $('nl-hint').textContent = hasKey
+  const mode = inferenceMode(), ready = mode !== 'none';
+  $('s-code').value = DATA.settings.practiceCode || '';
+  $('s-code-field').style.display = PROXY_URL ? '' : 'none';
+  $('nl-hint').textContent = ready
     ? 'You confirm every entry before it is saved.'
     : 'Needs a one-time setup — tap Interpret and we’ll walk you through it. Or just enter data directly below.';
-  $('img-hint').textContent = hasKey
+  $('img-hint').textContent = ready
     ? 'Upload the PDF from your lab or scan provider, or photograph the printed report. Values are transcribed for you to check — nothing saves until you confirm. Where a document covers several collection dates, the most recent is read first.'
     : 'Needs a one-time setup — tap the button and we’ll walk you through it.';
-  $('s-setup-wiz').textContent = hasKey
+  $('s-setup-wiz').textContent = ready
     ? 'Set this up again' : 'Walk me through setting this up';
+  $('s-setup-hint').textContent =
+    mode === 'proxy'  ? 'Connected to your practice. Nothing to pay — they cover it.'
+  : mode === 'direct' ? 'Using your own Anthropic key. Usage bills to your account.'
+  : PROXY_URL         ? 'Enter the code from your practice, or use your own Anthropic key.'
+  :                     'Step by step, in plain language. Takes about five minutes.';
   buildRefEditor();
 }
 
@@ -1519,9 +1555,11 @@ $('s-reset-refs').onclick = () => {
 };
 
 $('s-save-api').onclick = () => {
+  DATA.settings.practiceCode = ($('s-code').value || '').trim().toUpperCase();
   DATA.settings.apiKey = $('s-apikey').value.trim();
   DATA.settings.model = $('s-model').value;
-  save(); fillSettings(); toast(DATA.settings.apiKey ? 'Saved' : 'Key cleared');
+  save(); fillSettings();
+  toast(inferenceMode() === 'none' ? 'Cleared' : 'Saved');
 };
 
 $('d-export').onclick = () => {
@@ -1565,6 +1603,7 @@ $('d-wipe').onclick = () => openModal('Delete everything?',
 
 const CONSOLE_URL = 'https://console.anthropic.com';
 let wizStep = 0;
+let wizMode = 'code';   // 'code' = practice code, 'key' = own Anthropic key
 
 const WIZ = [
   /* 0 ─ what it is */
@@ -1658,6 +1697,8 @@ const WIZ = [
 ];
 
 function renderWiz() {
+  if (wizMode === 'code') return renderCodeStep();
+
   const step = WIZ[wizStep]();
   $('wiz-steps').innerHTML = WIZ.map((_,i) =>
     '<i class="' + (i <= wizStep ? 'on' : '') + '"></i>').join('');
@@ -1671,12 +1712,17 @@ function renderWiz() {
     (step.back ? '<button class="btn btn-ghost" id="wiz-back">Back</button>' : '') +
     '<button class="btn" id="wiz-next">' + step.next + '</button></div>' +
     (step.skip ? '<button class="wiz-skip" id="wiz-skip">' + step.skip + '</button>' : '');
+  if (PROXY_URL && wizStep === 0) {
+    html += '<button class="wiz-skip" id="wiz-tocode">I have a code from my practice instead</button>';
+  }
   $('wiz-body').innerHTML = html;
 
   const back = $('wiz-back');
   if (back) back.onclick = () => { wizStep--; renderWiz(); };
   const skip = $('wiz-skip');
   if (skip) skip.onclick = closeWiz;
+  const toCode = $('wiz-tocode');
+  if (toCode) toCode.onclick = () => { wizMode = 'code'; renderWiz(); };
 
   $('wiz-next').onclick = async () => {
     if (step.done) { closeWiz(); return; }
@@ -1688,6 +1734,78 @@ function renderWiz() {
     const inp = $('wiz-key');
     inp.value = DATA.settings.apiKey || '';
     inp.onkeydown = e => { if (e.key === 'Enter') $('wiz-next').click(); };
+  }
+}
+
+/* The default path: one field, one code, no account anywhere. */
+function renderCodeStep() {
+  $('wiz-steps').innerHTML = '';
+  $('wiz-body').innerHTML =
+    '<h2>Connect to your practice</h2>' +
+    '<p class="lead">Signal Health can read your meals, workouts and lab documents for you, ' +
+    'so you don’t have to type the numbers in by hand.</p>' +
+    '<p class="lead">Enter the code your practice gave you. There’s nothing to sign up for ' +
+    'and nothing to pay.</p>' +
+    '<label class="field"><span>Practice code</span>' +
+    '<input type="text" id="wiz-code" placeholder="SHP-0000-0000" autocomplete="off" ' +
+    'autocapitalize="characters" spellcheck="false"></label>' +
+    '<div class="key-status" id="wiz-status"></div>' +
+    '<div class="wiz-actions"><button class="btn" id="wiz-next">Connect</button></div>' +
+    '<button class="wiz-skip" id="wiz-skip">Skip — I’ll enter things myself</button>' +
+    '<button class="wiz-skip" id="wiz-tokey">Use my own Anthropic API key instead</button>';
+
+  const inp = $('wiz-code');
+  inp.value = DATA.settings.practiceCode || '';
+  inp.onkeydown = e => { if (e.key === 'Enter') $('wiz-next').click(); };
+  $('wiz-skip').onclick = closeWiz;
+  $('wiz-tokey').onclick = () => { wizMode = 'key'; wizStep = 0; renderWiz(); };
+  $('wiz-next').onclick = verifyWizCode;
+}
+
+/* Confirms the code against the practice's service. Uses the free 'ping'
+   operation, so checking a code never costs an inference. */
+async function verifyWizCode() {
+  const code = ($('wiz-code').value || '').trim().toUpperCase();
+  const status = $('wiz-status'), btn = $('wiz-next');
+  if (!code) { status.className='key-status bad'; status.textContent='Enter the code from your practice.'; return; }
+  if (!PROXY_URL) {
+    status.className='key-status bad';
+    status.textContent='This copy of the app isn’t connected to a practice yet. Use your own API key, or ask your practice for a link.';
+    return;
+  }
+
+  btn.disabled = true; btn.innerHTML = '<span class="spinner"></span>Checking…';
+  status.className='key-status'; status.textContent='';
+  try {
+    const res = await fetch(PROXY_URL, { method:'POST',
+      headers:{ 'content-type':'application/json' },
+      body: JSON.stringify({ code, kind:'ping' }) });
+    if (res.ok) {
+      DATA.settings.practiceCode = code; save(); fillSettings();
+      $('wiz-body').innerHTML =
+        '<h2>You’re connected</h2>' +
+        '<p class="lead">You can now describe a meal in plain words, or upload a lab PDF or ' +
+        'a photo, and the app will fill in the numbers.</p>' +
+        '<p class="lead">You’ll always see what it worked out and get to correct it before ' +
+        'anything is saved.</p>' +
+        '<div class="wiz-actions"><button class="btn" id="wiz-done">Start using it</button></div>';
+      $('wiz-done').onclick = closeWiz;
+      return;
+    }
+    let body={}; try { body = await res.json(); } catch {}
+    status.className='key-status bad';
+    if (res.status === 401 || res.status === 403) {
+      status.textContent = 'That code wasn’t recognised. Check it with your practice — they can issue a new one.';
+    } else if (res.status === 429) {
+      status.textContent = body.message || 'That code has reached today’s limit. Try again tomorrow.';
+    } else {
+      status.textContent = body.message || 'Couldn’t reach your practice’s service. Try again in a moment.';
+    }
+  } catch {
+    status.className='key-status bad';
+    status.textContent='Couldn’t connect. Check your internet connection and try again.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Connect';
   }
 }
 
@@ -1745,6 +1863,7 @@ async function verifyWizKey() {
 
 function openWiz(step) {
   wizStep = step || 0;
+  wizMode = PROXY_URL ? 'code' : 'key';
   renderWiz();
   $('wiz').classList.add('show');
   window.scrollTo(0,0);
