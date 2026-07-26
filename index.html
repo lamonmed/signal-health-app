@@ -403,7 +403,7 @@ tr:last-child td { border-bottom:none; }
           <div class="sc-value" id="vat-val">—</div>
           <div class="sc-badge" id="vat-badge">—</div>
           <div class="sc-bar-bg"><div class="sc-bar-fill" id="vat-bar" style="width:0%"></div></div>
-          <div class="sc-meta"><span>From DEXA</span><span id="vat-pct"></span></div>
+          <div class="sc-meta"><span id="vat-goal">From DEXA</span><span id="vat-pct"></span></div>
         </div>
         <div class="stat-card">
           <div class="sc-label">Lean Mass</div>
@@ -476,7 +476,7 @@ tr:last-child td { border-bottom:none; }
           <label class="field"><span>Goal waist (in)</span><input type="number" id="s-waisttarget" inputmode="decimal"></label>
         </div>
         <div class="field-row">
-          <label class="field"><span>Goal visceral fat (kg)</span><input type="number" id="s-vat" step="0.1" inputmode="decimal"></label>
+          <label class="field"><span>Goal visceral fat (lb)</span><input type="number" id="s-vat" step="0.1" inputmode="decimal"></label>
           <label class="field"><span>Daily protein (g)</span><input type="number" id="s-protein" inputmode="numeric"></label>
         </div>
         <div class="field-row">
@@ -717,6 +717,11 @@ function outOfRange(key, v) {
   if (r.max != null && v > r.max) return true;
   return false;
 }
+/* DEXA reports print visceral fat in kilograms, so that's what we store and
+   what the entry field asks for — but every display is in pounds. */
+const KG_TO_LB = 2.20462;
+const vatLb = kg => kg == null ? null : kg * KG_TO_LB;
+
 function rangeText(key) {
   const r = DATA.refRanges[key];
   if (!r) return '—';
@@ -788,13 +793,16 @@ function render() {
   if (curVAT != null) {
     const base = byDate(DATA.dexa).find(s => s.vat_kg != null);
     const p = base ? pct(curVAT, base.vat_kg, g.vat_kg.target) : 0;
-    $('vat-val').textContent = curVAT.toFixed(2);
+    $('vat-val').textContent = vatLb(curVAT).toFixed(1);
     $('vat-badge').textContent = (g.vat_kg.target != null && curVAT < g.vat_kg.target)
-      ? 'At goal' : 'kg';
+      ? 'At goal' : 'lb';
     $('vat-bar').style.width = p + '%';
     $('vat-pct').textContent = Math.round(p) + '%';
+    $('vat-goal').textContent = g.vat_kg.target != null
+      ? 'Goal < ' + vatLb(g.vat_kg.target).toFixed(1) + ' lb' : 'From DEXA';
   } else {
-    $('vat-val').textContent = '—'; $('vat-badge').textContent = 'No scan'; $('vat-pct').textContent = '';
+    $('vat-val').textContent = '—'; $('vat-badge').textContent = 'No scan';
+    $('vat-pct').textContent = ''; $('vat-goal').textContent = 'From DEXA';
   }
 
   $('lean-val').textContent = curLean != null ? curLean : '—';
@@ -980,13 +988,13 @@ function buildLabs() {
         (flag ? '<span class="flag-mark">◆</span>' : '') + '</td>';
     }).join('');
     return '<tr><td style="white-space:nowrap">' + f.label +
-      ' <span class="pill">' + f.unit + '</span></td>' +
-      '<td style="white-space:nowrap;color:var(--muted);font-size:13px">' + rangeText(f.k) + '</td>' +
-      cells + '</tr>';
+      ' <span class="pill">' + f.unit + '</span></td>' + cells +
+      '<td style="white-space:nowrap;color:var(--muted);font-size:13px;padding-left:18px">' +
+      rangeText(f.k) + '</td></tr>';
   }).filter(Boolean).join('');
 
-  el.innerHTML = '<div class="scroll-x"><table><thead><tr><th>Marker</th><th>Reference</th>' +
-    heads + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+  el.innerHTML = '<div class="scroll-x"><table><thead><tr><th>Marker</th>' + heads +
+    '<th style="padding-left:18px">Reference</th></tr></thead><tbody>' + rows + '</tbody></table></div>' +
     '<div class="hint">' +
     (anyFlag ? '<span class="flagged">◆</span> outside the reference range shown. ' : '') +
     'Reference ranges are editable in Settings and should match those printed on your own report. ' +
@@ -997,10 +1005,14 @@ function buildDexa() {
   const dexa = byDate(DATA.dexa), el = $('dexa-content');
   if (!dexa.length) { el.innerHTML = '<p class="empty">No scans recorded yet.</p>'; return; }
   const f = [['weight_lbs','Weight','lb'],['body_fat_pct','Body fat','%'],['lean_mass_lbs','Lean','lb'],
-             ['fat_mass_lbs','Fat','lb'],['vat_kg','VAT','kg'],['rmr_cal','RMR','cal']];
+             ['fat_mass_lbs','Fat','lb'],['vat_kg','VAT','lb'],['rmr_cal','RMR','cal']];
   const rows = dexa.slice().reverse().map(s => {
     const idx = DATA.dexa.indexOf(s);
-    const cells = f.map(([k,,u]) => '<td>' + (s[k] != null ? s[k] + ' ' + u : '—') + '</td>').join('');
+    const cells = f.map(([k,,u]) => {
+      let v = s[k];
+      if (k === 'vat_kg' && v != null) v = +vatLb(v).toFixed(1);   // stored in kg, shown in lb
+      return '<td>' + (v != null ? v + ' ' + u : '—') + '</td>';
+    }).join('');
     return '<tr><td style="white-space:nowrap">' + fmtDate(s.date) + '</td>' + cells +
       '<td style="text-align:right"><button class="log-del" data-del="dexa" data-i="' + idx + '">×</button></td></tr>';
   }).join('');
@@ -1091,7 +1103,7 @@ const MODALS = {
     '<label class="field"><span>Body fat (%)</span><input type="number" step="0.1" id="dx-bf" inputmode="decimal"></label>' +
     '<label class="field"><span>Lean mass (lb)</span><input type="number" step="0.1" id="dx-lean" inputmode="decimal"></label>' +
     '<label class="field"><span>Fat mass (lb)</span><input type="number" step="0.1" id="dx-fat" inputmode="decimal"></label>' +
-    '<label class="field"><span>Visceral fat (kg)</span><input type="number" step="0.01" id="dx-vat" inputmode="decimal"></label>' +
+    '<label class="field"><span>Visceral fat (kg, as on your report)</span><input type="number" step="0.01" id="dx-vat" inputmode="decimal"></label>' +
     '<label class="field"><span>RMR (cal)</span><input type="number" id="dx-rmr" inputmode="numeric"></label></div>' +
     '<label class="field"><span>Note</span><input type="text" id="m-notes"></label>',
     () => {
@@ -1504,7 +1516,7 @@ function fillSettings() {
   $('s-wtarget').value = g.weight_lbs.target != null ? g.weight_lbs.target : '';
   $('s-waiststart').value = g.waist_inches.start != null ? g.waist_inches.start : '';
   $('s-waisttarget').value = g.waist_inches.target != null ? g.waist_inches.target : '';
-  $('s-vat').value = g.vat_kg.target != null ? g.vat_kg.target : '';
+  $('s-vat').value = g.vat_kg.target != null ? +vatLb(g.vat_kg.target).toFixed(1) : '';
   $('s-protein').value = g.protein_g_min != null ? g.protein_g_min : '';
   $('s-date').value = DATA.profile.goalDate || '';
   $('s-sex').value = DATA.profile.sex || '';
@@ -1534,7 +1546,8 @@ $('s-save-goals').onclick = () => {
   DATA.goals.weight_lbs.target = num($('s-wtarget').value);
   DATA.goals.waist_inches.start = num($('s-waiststart').value);
   DATA.goals.waist_inches.target = num($('s-waisttarget').value);
-  DATA.goals.vat_kg.target = num($('s-vat').value);
+  { const lb = num($('s-vat').value);
+    DATA.goals.vat_kg.target = lb == null ? null : +(lb / KG_TO_LB).toFixed(3); }
   DATA.goals.protein_g_min = num($('s-protein').value);
   DATA.profile.goalDate = $('s-date').value || '';
   const prevSex = DATA.profile.sex;
