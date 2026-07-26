@@ -47,10 +47,15 @@ button { cursor:pointer; border:none; background:none; }
 /* ── Layout ── */
 .app { max-width:1000px; margin:0 auto; padding:4px 20px 8px; }
 .topbar {
-  position:relative; display:flex; align-items:flex-end; justify-content:space-between;
-  gap:14px; min-height:158px; padding:0 20px 18px;
+  position:relative; display:flex; align-items:flex-end;
+  min-height:158px; padding:0;
   background-image:var(--hero); background-size:cover; background-position:center 48%;
   background-color:#2b3327; overflow:hidden;
+}
+.topbar-inner {
+  position:relative; z-index:1; display:flex; align-items:flex-end;
+  justify-content:space-between; gap:14px;
+  width:100%; max-width:1000px; margin:0 auto; padding:0 20px 18px;
 }
 .topbar::after {
   content:''; position:absolute; inset:0; pointer-events:none;
@@ -58,7 +63,8 @@ button { cursor:pointer; border:none; background:none; }
              rgba(10,14,8,0.58) 100%);
 }
 .topbar > * { position:relative; z-index:1; }
-@media (min-width:760px){ .topbar { min-height:190px; padding-bottom:24px; } }
+@media (min-width:760px){ .topbar { min-height:190px; }
+  .topbar-inner { padding-bottom:24px; } }
 .brand { font-family:var(--display); font-size:clamp(28px,8vw,40px); letter-spacing:var(--display-ls);
   line-height:1.02; color:#fff; text-shadow:0 1px 18px rgba(0,0,0,0.5); max-width:9em; }
 .brand .mark { color:var(--sand); }
@@ -330,8 +336,10 @@ tr:last-child td { border-bottom:none; }
 <!-- ══════════ APP ══════════ -->
 <div id="app-root" style="display:none">
   <header class="topbar">
-    <div class="brand">Signal Health Practice</div>
-    <div class="topbar-sub"><span id="hdr-name"></span><span id="hdr-days"></span></div>
+    <div class="topbar-inner">
+      <div class="brand">Signal Health Practice</div>
+      <div class="topbar-sub"><span id="hdr-name"></span><span id="hdr-days"></span></div>
+    </div>
   </header>
 
   <div class="app">
@@ -702,15 +710,27 @@ function render() {
 
   const curWeight = latest(bc,'weight_lbs');
   const curWaist  = latest(bc,'waist_inches');
+
+  /* Progress is measured from the earliest entry on record. Someone who
+     back-fills history after signing up should see the whole journey, not
+     only what has happened since they installed this. */
+  const earliest = (arr, field, fallback) => {
+    const f = byDate(arr).find(r => r[field] != null);
+    return f ? f[field] : fallback;
+  };
+  const wtStart    = earliest(bc, 'weight_lbs',   g.weight_lbs.start);
+  const waistStart = earliest(bc, 'waist_inches', g.waist_inches.start);
   const curVAT    = latest(DATA.dexa,'vat_kg');
   const curLean   = latest(DATA.dexa,'lean_mass_lbs');
   const curBF     = latest(DATA.dexa,'body_fat_pct');
 
   if (curWeight != null) {
-    const p = pct(curWeight, g.weight_lbs.start, g.weight_lbs.target);
+    const p = pct(curWeight, wtStart, g.weight_lbs.target);
     $('wt-val').textContent = curWeight;
-    $('wt-badge').textContent = g.weight_lbs.start != null
-      ? '↓ ' + (g.weight_lbs.start - curWeight).toFixed(1) + ' lb' : 'lb';
+    const lost = wtStart != null ? wtStart - curWeight : null;
+    $('wt-badge').textContent = lost == null ? 'lb'
+      : lost > 0 ? '↓ ' + lost.toFixed(1) + ' lb'
+      : lost < 0 ? '↑ ' + Math.abs(lost).toFixed(1) + ' lb' : 'lb';
     $('wt-bar').style.width = p + '%';
     $('wt-pct').textContent = Math.round(p) + '%';
     $('wt-range').textContent = g.weight_lbs.target != null
@@ -721,10 +741,12 @@ function render() {
   }
 
   if (curWaist != null) {
-    const p = pct(curWaist, g.waist_inches.start, g.waist_inches.target);
+    const p = pct(curWaist, waistStart, g.waist_inches.target);
     $('waist-val').textContent = curWaist + '″';
-    $('waist-badge').textContent = g.waist_inches.start != null
-      ? '↓ ' + (g.waist_inches.start - curWaist).toFixed(1) + '″' : 'inches';
+    const wl = waistStart != null ? waistStart - curWaist : null;
+    $('waist-badge').textContent = wl == null ? 'inches'
+      : wl > 0 ? '↓ ' + wl.toFixed(1) + '″'
+      : wl < 0 ? '↑ ' + Math.abs(wl).toFixed(1) + '″' : 'inches';
     $('waist-bar').style.width = p + '%';
     $('waist-pct').textContent = Math.round(p) + '%';
     $('waist-range').textContent = g.waist_inches.target != null
