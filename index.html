@@ -189,6 +189,12 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
   font-size:13px; color:var(--muted); line-height:1.5; padding:3px 0; }
 .sub-item .log-del { font-size:16px; padding:0 3px; }
 
+.mini-item { padding:14px 0; border-top:1px solid var(--border-soft); }
+.mini-item:first-of-type { border-top:none; padding-top:0; }
+.mini-item-head { display:flex; justify-content:space-between; align-items:center;
+  font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); margin-bottom:9px; }
+.mini-item-head .log-del { font-size:16px; padding:0 3px; }
+
 .stat-inline { display:flex; gap:34px; margin-bottom:20px; flex-wrap:wrap; }
 .stat-inline .k { font-size:10px; letter-spacing:.15em; text-transform:uppercase; color:var(--muted); margin-bottom:3px; }
 .stat-inline .v { font-family:var(--display); font-size:32px; line-height:1; letter-spacing:var(--display-ls); font-variant-numeric:tabular-nums; }
@@ -438,7 +444,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
     <section class="view" id="view-log">
       <div class="panel">
         <div class="panel-header"><div class="panel-title">Quick entry</div></div>
-        <textarea id="nl-input" placeholder="Describe a meal or a workout in your own words.&#10;&#10;“Grilled chicken salad and an apple for lunch”&#10;“45 minutes of upper body strength work”"></textarea>
+        <textarea id="nl-input" placeholder="Describe a meal or a workout — or your whole day at once.&#10;&#10;“Grilled chicken salad and an apple for lunch”&#10;“Eggs for breakfast, chicken and rice for lunch, salmon for dinner, and a 45 minute bike ride”"></textarea>
         <div style="height:12px"></div>
         <button class="btn btn-block" id="nl-parse">Interpret</button>
         <div class="hint" id="nl-hint"></div>
@@ -1005,7 +1011,9 @@ function buildWorkouts() {
   const w = byDate(DATA.workouts), el = $('workout-content');
   if (!w.length) { el.innerHTML = '<p class="empty">Nothing recorded yet.</p>'; return; }
   const now = new Date();
-  const week = w.filter(s => (now - new Date(s.date+'T00:00:00')) < 7*86400000).length;
+  const weekRows = w.filter(s => (now - new Date(s.date+'T00:00:00')) < 7*86400000);
+  const week = weekRows.length;
+  const weekMinutes = weekRows.reduce((s,r) => s + (r.duration_min||0), 0);
 
   /* Average per week across the whole span logged, floored at one week so a
      few sessions on day one don't read as an implausible weekly rate. */
@@ -1015,6 +1023,20 @@ function buildWorkouts() {
     const spanWeeks = Math.max(1, (now - new Date(firstDated.date+'T00:00:00')) / (7*86400000));
     perWeek = (w.length / spanWeeks).toFixed(1).replace(/\.0$/,'');
   }
+
+  /* A plain rollup computed from what's already logged — no AI call, so it's
+     free and always exactly matches the underlying data. This is what answers
+     "summarize my workouts this week" without needing to ask the model anything. */
+  const byType = new Map();
+  weekRows.forEach(r => {
+    const t = r.type || 'Other';
+    const cur = byType.get(t) || { min:0, n:0 };
+    cur.min += (r.duration_min||0); cur.n += 1;
+    byType.set(t, cur);
+  });
+  const typeChips = [...byType.entries()].sort((a,b) => b[1].min - a[1].min).map(([t,v]) =>
+    '<span class="pill" style="margin-right:16px">' + esc(t) + ' · ' + v.n + (v.n===1?' session':' sessions') +
+    (v.min ? ' · ' + v.min + ' min' : '') + '</span>').join('');
 
   const rows = w.slice(-10).reverse().map(s => {
     const idx = DATA.workouts.indexOf(s);
@@ -1027,8 +1049,10 @@ function buildWorkouts() {
 
   el.innerHTML = '<div class="stat-inline">' +
     '<div><div class="k">This week</div><div class="v">' + week + '</div></div>' +
+    '<div><div class="k">Week minutes</div><div class="v">' + weekMinutes + '</div></div>' +
     '<div><div class="k">Avg / week</div><div class="v">' + (perWeek != null ? perWeek : '—') + '</div></div>' +
-    '<div><div class="k">Total</div><div class="v">' + w.length + '</div></div></div>' + rows;
+    '<div><div class="k">Total</div><div class="v">' + w.length + '</div></div></div>' +
+    (typeChips ? '<div style="margin:2px 0 16px">' + typeChips + '</div>' : '') + rows;
 }
 
 function buildLabs() {
@@ -1201,22 +1225,38 @@ document.addEventListener('click', e => {
   }
 });
 
+/* Remove one parsed item from the multi-item confirm screen before saving —
+   distinct from [data-del], which removes an already-saved record. */
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-rm]');
+  if (!btn) return;
+  const item = btn.closest('.mini-item');
+  if (item) item.remove();
+});
+
 /* ══════════════════ AI PARSING ══════════════════ */
-const PARSE_PROMPT = `You convert a plain-language health log into structured JSON.
+const PARSE_PROMPT = `You convert a plain-language health log into structured JSON. The person may
+describe a single meal or workout, or dictate an entire day at once — several meals and
+several activities in one block of text.
 
 Return ONLY a JSON object, no markdown fences, no commentary, matching:
 {
   "type": "nutrition" | "workout" | "both" | "unknown",
-  "nutrition": { "calories": number|null, "protein_g": number|null, "notes": string } | null,
-  "workout": { "type": "Strength"|"Cardio"|"Cycling"|"Walking"|"HIIT"|"Yoga"|"Mobility", "duration_min": number|null, "details": string } | null
+  "nutrition": [ { "calories": number|null, "protein_g": number|null, "notes": string } ] | null,
+  "workout": [ { "type": "Strength"|"Cardio"|"Cycling"|"Walking"|"HIIT"|"Yoga"|"Mobility", "duration_min": number|null, "details": string } ] | null
 }
 
 Rules:
+- Give each distinct meal or eating occasion its own object in the "nutrition" array, in the
+  order mentioned (breakfast, lunch, a snack, dinner, etc. are each separate). Likewise give
+  each distinct activity its own object in "workout".
+- Only combine everything into a single nutrition object if the person explicitly gives one
+  combined total for the day (e.g. "about 2200 calories total today") rather than listing meals.
 - Estimate calories and protein from typical portion sizes when not stated. Round to the nearest 10 calories and nearest 5g protein.
 - These are estimates; do not refuse because of imprecision.
-- "notes" briefly restates the food described.
-- "details" briefly restates the activity described.
-- If the text describes neither food nor exercise, set type to "unknown" and both objects to null.
+- "notes" briefly restates the food described for that item.
+- "details" briefly restates the activity described for that item.
+- If the text describes neither food nor exercise, set type to "unknown" and both fields to null.
 
 Text to convert:
 `;
@@ -1233,39 +1273,68 @@ $('nl-parse').onclick = async () => {
 };
 
 function showConfirm(p, rawText) {
-  if (!p || p.type === 'unknown' || (!p.nutrition && !p.workout)) {
+  /* Accept either the new array shape or a lone object, for robustness. */
+  const toList = v => Array.isArray(v) ? v : (v ? [v] : []);
+  const nutrition = toList(p && p.nutrition);
+  const workout   = toList(p && p.workout);
+  if (!p || p.type === 'unknown' || (!nutrition.length && !workout.length)) {
     toast('Couldn’t tell whether that was food or activity'); return;
   }
+  const WORKOUT_TYPES = ['Strength','Cardio','Cycling','Walking','HIIT','Yoga','Mobility'];
   let html = '<div class="notice">These are estimates drawn from what you wrote. ' +
-             'Check them before saving and adjust anything that looks wrong.</div>';
-  if (p.nutrition) {
-    html += '<div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:6px 0 9px">Nutrition</div>' +
-      '<div class="field-row">' +
-      '<label class="field"><span>Calories</span><input type="number" id="c-cal" inputmode="numeric" value="' + (p.nutrition.calories!=null?p.nutrition.calories:'') + '"></label>' +
-      '<label class="field"><span>Protein (g)</span><input type="number" id="c-pro" inputmode="numeric" value="' + (p.nutrition.protein_g!=null?p.nutrition.protein_g:'') + '"></label></div>' +
-      '<label class="field"><span>Note</span><input type="text" id="c-notes" value="' + esc(p.nutrition.notes||'') + '"></label>';
+             'Check each item before saving, and remove or adjust anything that looks wrong.</div>';
+
+  if (nutrition.length) {
+    html += '<div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:6px 0 9px">Nutrition' +
+      (nutrition.length > 1 ? ' · ' + nutrition.length + ' items' : '') + '</div>';
+    nutrition.forEach((n, i) => {
+      html += '<div class="mini-item" data-kind="nutrition" data-i="' + i + '">' +
+        (nutrition.length > 1 ? '<div class="mini-item-head"><span>Item ' + (i+1) + '</span>' +
+          '<button type="button" class="log-del" data-rm="1" aria-label="Remove">×</button></div>' : '') +
+        '<div class="field-row">' +
+        '<label class="field"><span>Calories</span><input type="number" id="c-cal-' + i + '" inputmode="numeric" value="' + (n.calories!=null?n.calories:'') + '"></label>' +
+        '<label class="field"><span>Protein (g)</span><input type="number" id="c-pro-' + i + '" inputmode="numeric" value="' + (n.protein_g!=null?n.protein_g:'') + '"></label></div>' +
+        '<label class="field"><span>Note</span><input type="text" id="c-notes-' + i + '" value="' + esc(n.notes||'') + '"></label>' +
+        '</div>';
+    });
   }
-  if (p.workout) {
-    html += '<div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:14px 0 9px">Movement</div>' +
-      '<label class="field"><span>Type</span><select id="c-type">' +
-      ['Strength','Cardio','Cycling','Walking','HIIT','Yoga','Mobility'].map(t =>
-        '<option' + (p.workout.type===t?' selected':'') + '>' + t + '</option>').join('') +
-      '</select></label><div class="field-row">' +
-      '<label class="field"><span>Duration (min)</span><input type="number" id="c-dur" inputmode="numeric" value="' + (p.workout.duration_min!=null?p.workout.duration_min:'') + '"></label>' +
-      '<label class="field"><span>Detail</span><input type="text" id="c-det" value="' + esc(p.workout.details||'') + '"></label></div>';
+  if (workout.length) {
+    html += '<div class="k" style="font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:14px 0 9px">Movement' +
+      (workout.length > 1 ? ' · ' + workout.length + ' items' : '') + '</div>';
+    workout.forEach((w, i) => {
+      html += '<div class="mini-item" data-kind="workout" data-i="' + i + '">' +
+        (workout.length > 1 ? '<div class="mini-item-head"><span>Item ' + (i+1) + '</span>' +
+          '<button type="button" class="log-del" data-rm="1" aria-label="Remove">×</button></div>' : '') +
+        '<label class="field"><span>Type</span><select id="c-type-' + i + '">' +
+        WORKOUT_TYPES.map(t => '<option' + (w.type===t?' selected':'') + '>' + t + '</option>').join('') +
+        '</select></label><div class="field-row">' +
+        '<label class="field"><span>Duration (min)</span><input type="number" id="c-dur-' + i + '" inputmode="numeric" value="' + (w.duration_min!=null?w.duration_min:'') + '"></label>' +
+        '<label class="field"><span>Detail</span><input type="text" id="c-det-' + i + '" value="' + esc(w.details||'') + '"></label></div>' +
+        '</div>';
+    });
   }
   html += '<label class="field"><span>Date</span><input type="date" id="c-date" value="' + today() + '"></label>';
 
   openModal('Check before saving',
     'Estimated from: “' + rawText.slice(0,80) + (rawText.length>80?'…':'') + '”', html, () => {
       const date = $('c-date').value || today();
-      if (p.nutrition) DATA.nutrition.push({ date, calories:num($('c-cal').value),
-        protein_g:num($('c-pro').value), notes:$('c-notes').value||'',
-        raw_input_text:rawText, parsed_by_ai:true });
-      if (p.workout) DATA.workouts.push({ date, type:$('c-type').value,
-        duration_min:num($('c-dur').value), details:$('c-det').value||'',
-        notes:'', raw_input_text:rawText, parsed_by_ai:true });
-      save(); render(); $('nl-input').value=''; toast('Recorded'); showView('dash');
+      let saved = 0;
+      document.querySelectorAll('#modal-body .mini-item[data-kind="nutrition"]').forEach(el => {
+        const i = el.dataset.i;
+        DATA.nutrition.push({ date, calories:num($('c-cal-'+i).value),
+          protein_g:num($('c-pro-'+i).value), notes:$('c-notes-'+i).value||'',
+          raw_input_text:rawText, parsed_by_ai:true });
+        saved++;
+      });
+      document.querySelectorAll('#modal-body .mini-item[data-kind="workout"]').forEach(el => {
+        const i = el.dataset.i;
+        DATA.workouts.push({ date, type:$('c-type-'+i).value,
+          duration_min:num($('c-dur-'+i).value), details:$('c-det-'+i).value||'',
+          notes:'', raw_input_text:rawText, parsed_by_ai:true });
+        saved++;
+      });
+      if (!saved) { toast('Nothing left to save'); return false; }
+      save(); render(); $('nl-input').value=''; toast(saved > 1 ? 'Recorded ' + saved + ' items' : 'Recorded'); showView('dash');
     });
 }
 
