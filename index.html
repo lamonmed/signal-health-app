@@ -212,6 +212,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 }
 .notice strong { color:var(--text); font-weight:600; }
 .notice.warn { border-left-color:var(--flag); background:#f7f0eb; }
+.nudge-link { color:var(--text); font-weight:600; text-decoration:underline; white-space:nowrap; }
 
 .toast {
   position:fixed; left:50%; transform:translateX(-50%) translateY(16px);
@@ -390,7 +391,9 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 
     <!-- ── DASHBOARD ── -->
     <section class="view active" id="view-dash">
-            <div class="panel">
+            <div class="notice warn" id="backup-nudge" style="display:none"></div>
+
+      <div class="panel">
         <div class="panel-header"><div class="panel-title">Nutrition</div><span class="panel-badge">Recent</span></div>
         <div id="nutrition-content"></div>
       </div>
@@ -491,6 +494,17 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 
     <!-- ── SETTINGS ── -->
     <section class="view" id="view-settings">
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Profile</div></div>
+        <div class="notice">
+          There's no account here, and nothing to cancel — everything on this screen lives only
+          on this device. <strong>Your data</strong> below is where you back up, restore, or
+          permanently delete it.
+        </div>
+        <label class="field"><span>Name</span><input type="text" id="s-name" placeholder="Your name"></label>
+        <button class="btn btn-block" id="s-save-profile">Save</button>
+      </div>
+
       <div class="panel">
         <div class="panel-header"><div class="panel-title">Goals</div></div>
         <div class="field-row">
@@ -625,7 +639,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-25.1';
+const APP_VERSION = '2026-07-26.1';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
@@ -760,7 +774,7 @@ function blankData() {
     },
     refRanges: defaultRanges(''),
     bodyComposition:[], dexa:[], nutrition:[], workouts:[], labs:[],
-    settings:{ practiceCode:'', apiKey:'', model:'claude-sonnet-5' }
+    settings:{ practiceCode:'', apiKey:'', model:'claude-sonnet-5', lastExportAt:null }
   };
 }
 
@@ -809,6 +823,27 @@ function daysUntil(d) {
   const t = new Date(d + 'T00:00:00');
   if (isNaN(t)) return null;
   return Math.max(0, Math.round((t - now) / 86400000));
+}
+function daysSince(iso) {
+  if (!iso) return Infinity;
+  const t = new Date(iso);
+  if (isNaN(t)) return Infinity;
+  return Math.floor((Date.now() - t.getTime()) / 86400000);
+}
+function updateBackupNudge() {
+  const el = $('backup-nudge');
+  if (!el) return;
+  const totalEntries = DATA.bodyComposition.length + DATA.nutrition.length +
+    DATA.workouts.length + DATA.labs.length + DATA.dexa.length;
+  const since = daysSince(DATA.settings.lastExportAt);
+  const overdue = totalEntries > 0 && since >= 7;
+  if (!overdue) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const msg = DATA.settings.lastExportAt
+    ? 'It’s been over a week since your last backup.'
+    : 'You haven’t backed up yet.';
+  el.style.display = '';
+  el.innerHTML = msg + ' Your data only lives on this device. ' +
+    '<a href="#" id="backup-nudge-export" class="nudge-link">Export now</a>';
 }
 function pct(cur, start, target) {
   if (cur == null || start == null || target == null || start === target) return 0;
@@ -933,6 +968,7 @@ function render() {
     : '';
 
   buildChart(); buildNutrition(); buildWorkouts(); buildLabs(); buildDexa(); updateStats();
+  updateBackupNudge();
 }
 
 function movingAvg(data, w) {
@@ -1040,7 +1076,10 @@ function buildNutrition() {
       const label = r.notes ? esc(r.notes) : (bits.join(' · ') || 'Entry');
       return '<div class="sub-item"><span>' + label +
         (r.notes && bits.length ? ' — ' + bits.join(' · ') : '') + '</span>' +
-        '<button class="log-del" data-del="nutrition" data-i="' + idx + '" aria-label="Remove">×</button></div>';
+        '<span style="display:flex;flex-shrink:0">' +
+        '<button class="log-del" data-edit="nutrition" data-i="' + idx + '" aria-label="Edit">✎</button>' +
+        '<button class="log-del" data-del="nutrition" data-i="' + idx + '" aria-label="Remove">×</button>' +
+        '</span></div>';
     }).join('');
     return '<div class="log-item"><div class="log-rule"></div><div class="log-main">' +
       '<div class="log-title">' + fmtDate(d.date) +
@@ -1097,7 +1136,8 @@ function buildWorkouts() {
       '<div class="log-title">' + esc(s.type || 'Session') +
       (s.duration_min ? ' · ' + s.duration_min + ' min' : '') + '</div>' +
       '<div class="log-meta">' + fmtDate(s.date) + (s.details ? ' · ' + esc(s.details) : '') + '</div>' +
-      '</div><button class="log-del" data-del="workouts" data-i="' + idx + '" aria-label="Remove">×</button></div>';
+      '</div><button class="log-del" data-edit="workouts" data-i="' + idx + '" aria-label="Edit">✎</button>' +
+      '<button class="log-del" data-del="workouts" data-i="' + idx + '" aria-label="Remove">×</button></div>';
   }).join('');
 
   el.innerHTML = '<div class="stat-inline">' +
@@ -1187,7 +1227,7 @@ $('modal-cancel').onclick = closeModal;
 $('modal-bg').onclick = e => { if (e.target === $('modal-bg')) closeModal(); };
 $('modal-confirm').onclick = () => { if (modalSave && modalSave() !== false) closeModal(); };
 
-const dateField = id => '<label class="field"><span>Date</span><input type="date" id="' + id + '" value="' + today() + '"></label>';
+const dateField = (id, val) => '<label class="field"><span>Date</span><input type="date" id="' + id + '" value="' + (val || today()) + '"></label>';
 
 const MODALS = {
   weight: () => openModal('Weight & waist','', dateField('m-date') +
@@ -1203,7 +1243,12 @@ const MODALS = {
       save(); render(); toast('Recorded'); showView('dash');
     }),
 
-  nutrition: (pre) => openModal('Nutrition','', dateField('m-date') +
+  /* `pre` prefills the form. `editIndex` — when set, on save this updates
+     DATA.nutrition[editIndex] in place instead of pushing a new record. Lets
+     the same modal serve both "Enter directly" (no args) and the edit
+     affordance on an already-logged entry ([data-edit] below). */
+  nutrition: (pre, editIndex) => openModal(editIndex != null ? 'Edit entry' : 'Nutrition','',
+    dateField('m-date', pre && pre.date) +
     '<div class="field-row">' +
     '<label class="field"><span>Calories</span><input type="number" id="m-cal" inputmode="numeric" value="' + (pre&&pre.calories!=null?pre.calories:'') + '"></label>' +
     '<label class="field"><span>Protein (g)</span><input type="number" id="m-pro" inputmode="numeric" value="' + (pre&&pre.protein_g!=null?pre.protein_g:'') + '"></label></div>' +
@@ -1211,12 +1256,14 @@ const MODALS = {
     () => {
       const c = num($('m-cal').value), p = num($('m-pro').value);
       if (c == null && p == null) { toast('Enter calories or protein'); return false; }
-      DATA.nutrition.push({ date:$('m-date').value||today(), calories:c, protein_g:p,
-        notes:$('m-notes').value||'', raw_input_text:(pre&&pre.raw)||'', parsed_by_ai:!!pre });
-      save(); render(); toast('Recorded'); showView('dash');
+      const fields = { date:$('m-date').value||today(), calories:c, protein_g:p, notes:$('m-notes').value||'' };
+      if (editIndex != null) Object.assign(DATA.nutrition[editIndex], fields);
+      else DATA.nutrition.push(Object.assign({ raw_input_text:'', parsed_by_ai:false }, fields));
+      save(); render(); toast(editIndex != null ? 'Updated' : 'Recorded'); showView('dash');
     }),
 
-  workout: (pre) => openModal('Movement','', dateField('m-date') +
+  workout: (pre, editIndex) => openModal(editIndex != null ? 'Edit entry' : 'Movement','',
+    dateField('m-date', pre && pre.date) +
     '<label class="field"><span>Type</span><select id="m-type">' +
     ['Strength','Cardio','Cycling','Walking','HIIT','Yoga','Mobility'].map(t =>
       '<option' + (pre&&pre.type===t?' selected':'') + '>' + t + '</option>').join('') +
@@ -1224,10 +1271,11 @@ const MODALS = {
     '<label class="field"><span>Duration (min)</span><input type="number" id="m-dur" inputmode="numeric" value="' + (pre&&pre.duration_min!=null?pre.duration_min:'') + '"></label>' +
     '<label class="field"><span>Detail</span><input type="text" id="m-det" value="' + esc(pre&&pre.details||'') + '"></label></div>',
     () => {
-      DATA.workouts.push({ date:$('m-date').value||today(), type:$('m-type').value,
-        details:$('m-det').value||'', duration_min:num($('m-dur').value),
-        notes:'', raw_input_text:(pre&&pre.raw)||'', parsed_by_ai:!!pre });
-      save(); render(); toast('Recorded'); showView('dash');
+      const fields = { date:$('m-date').value||today(), type:$('m-type').value,
+        details:$('m-det').value||'', duration_min:num($('m-dur').value) };
+      if (editIndex != null) Object.assign(DATA.workouts[editIndex], fields);
+      else DATA.workouts.push(Object.assign({ notes:'', raw_input_text:'', parsed_by_ai:false }, fields));
+      save(); render(); toast(editIndex != null ? 'Updated' : 'Recorded'); showView('dash');
     }),
 
   labs: () => openModal('Laboratory','Enter the values from your report. Leave blank anything you don’t have.',
@@ -1276,6 +1324,25 @@ document.addEventListener('click', e => {
   if (DATA[list] && i >= 0 && i < DATA[list].length) {
     DATA[list].splice(i,1); save(); render(); toast('Removed');
   }
+});
+
+/* Reopen an already-saved nutrition/workout entry, prefilled, for correction —
+   the "I dictated a meal wrong and couldn't fix it" gap from patient feedback. */
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-edit]');
+  if (!btn) return;
+  const list = btn.dataset.edit, i = parseInt(btn.dataset.i,10);
+  if (!DATA[list] || i < 0 || i >= DATA[list].length) return;
+  MODALS[list === 'workouts' ? 'workout' : 'nutrition'](DATA[list][i], i);
+});
+
+/* "Export now" link inside the backup nudge banner — jumps straight to the
+   existing Data & Backup export button rather than duplicating its logic. */
+document.addEventListener('click', e => {
+  const btn = e.target.closest('#backup-nudge-export');
+  if (!btn) return;
+  e.preventDefault();
+  $('d-export').click();
 });
 
 /* Remove one parsed item from the multi-item confirm screen before saving —
@@ -1724,6 +1791,7 @@ function buildRefEditor() {
 
 function fillSettings() {
   const g = DATA.goals;
+  $('s-name').value = DATA.profile.name || '';
   $('s-wstart').value = g.weight_lbs.start != null ? g.weight_lbs.start : '';
   $('s-wtarget').value = g.weight_lbs.target != null ? g.weight_lbs.target : '';
   $('s-waiststart').value = g.waist_inches.start != null ? g.waist_inches.start : '';
@@ -1752,6 +1820,13 @@ function fillSettings() {
   :                     'Step by step, in plain language. Takes about five minutes.';
   buildRefEditor();
 }
+
+$('s-save-profile').onclick = () => {
+  const name = $('s-name').value.trim();
+  if (!name) { toast('Enter a name'); return; }
+  DATA.profile.name = name;
+  save(); render(); fillSettings(); toast('Saved');
+};
 
 $('s-save-goals').onclick = () => {
   DATA.goals.weight_lbs.start = num($('s-wstart').value);
@@ -1788,12 +1863,14 @@ $('s-save-api').onclick = () => {
 };
 
 $('d-export').onclick = () => {
+  DATA.settings.lastExportAt = new Date().toISOString();
   const blob = new Blob([JSON.stringify(DATA,null,2)], { type:'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = 'signal-health-backup-' + today() + '.json';
   document.body.appendChild(a); a.click(); document.body.removeChild(a);
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  save(); updateBackupNudge();
   toast('Backup downloaded');
 };
 
