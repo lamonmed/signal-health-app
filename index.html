@@ -179,6 +179,9 @@ tr:last-child td { border-bottom:none; }
 .log-title { font-size:15px; }
 .log-meta { font-size:13px; color:var(--muted); margin-top:2px; word-wrap:break-word; line-height:1.5; }
 .log-del { color:var(--muted); font-size:19px; line-height:1; padding:2px 5px; flex-shrink:0; }
+.sub-item { display:flex; justify-content:space-between; align-items:flex-start; gap:10px;
+  font-size:13px; color:var(--muted); line-height:1.5; padding:3px 0; }
+.sub-item .log-del { font-size:16px; padding:0 3px; }
 
 .stat-inline { display:flex; gap:34px; margin-bottom:20px; flex-wrap:wrap; }
 .stat-inline .k { font-size:10px; letter-spacing:.15em; text-transform:uppercase; color:var(--muted); margin-bottom:3px; }
@@ -869,28 +872,54 @@ function buildNutrition() {
   const n = byDate(DATA.nutrition), el = $('nutrition-content');
   const goal = DATA.goals.protein_g_min;
   if (!n.length) { el.innerHTML = '<p class="empty">Nothing recorded yet.</p>'; return; }
-  const withP = n.filter(r => r.protein_g != null);
-  const avgP = withP.length ? Math.round(withP.reduce((a,b)=>a+b.protein_g,0)/withP.length) : null;
-  const withC = n.filter(r => r.calories != null);
-  const avgC = withC.length ? Math.round(withC.reduce((a,b)=>a+b.calories,0)/withC.length) : null;
 
-  const rows = n.slice(-10).reverse().map(r => {
-    const idx = DATA.nutrition.indexOf(r);
-    const meets = goal && r.protein_g != null && r.protein_g >= goal;
+  /* Group by date first. The protein target is a daily one, so averaging
+     across individual entries would divide a day's meals into fractions
+     of the goal and badly understate intake. */
+  const days = new Map();
+  n.forEach(r => {
+    const key = r.date || '';
+    if (!days.has(key)) days.set(key, { date:key, cal:0, pro:0, hasCal:false, hasPro:false, items:[] });
+    const d = days.get(key);
+    if (r.calories != null)  { d.cal += r.calories;  d.hasCal = true; }
+    if (r.protein_g != null) { d.pro += r.protein_g; d.hasPro = true; }
+    d.items.push(r);
+  });
+  const list = [...days.values()].sort((a,b) => a.date.localeCompare(b.date));
+
+  const proDays = list.filter(d => d.hasPro);
+  const avgP = proDays.length ? Math.round(proDays.reduce((a,b)=>a+b.pro,0)/proDays.length) : null;
+  const calDays = list.filter(d => d.hasCal);
+  const avgC = calDays.length ? Math.round(calDays.reduce((a,b)=>a+b.cal,0)/calDays.length) : null;
+  const onTarget = goal ? proDays.filter(d => d.pro >= goal).length : null;
+
+  const rows = list.slice(-7).reverse().map(d => {
+    const meets = goal && d.hasPro && d.pro >= goal;
+    const items = d.items.map(r => {
+      const idx = DATA.nutrition.indexOf(r);
+      const bits = [];
+      if (r.calories != null)  bits.push(r.calories + ' kcal');
+      if (r.protein_g != null) bits.push(r.protein_g + 'g');
+      const label = r.notes ? esc(r.notes) : (bits.join(' · ') || 'Entry');
+      return '<div class="sub-item"><span>' + label +
+        (r.notes && bits.length ? ' — ' + bits.join(' · ') : '') + '</span>' +
+        '<button class="log-del" data-del="nutrition" data-i="' + idx + '" aria-label="Remove">×</button></div>';
+    }).join('');
     return '<div class="log-item"><div class="log-rule"></div><div class="log-main">' +
-      '<div class="log-title">' + fmtDate(r.date) +
-      (r.calories != null ? ' · ' + r.calories + ' kcal' : '') +
-      (r.protein_g != null ? ' · <span' + (meets ? ' style="color:var(--sand-deep)"' : '') + '>' +
-        r.protein_g + 'g protein</span>' : '') + '</div>' +
-      (r.notes ? '<div class="log-meta">' + esc(r.notes) + '</div>' : '') +
-      '</div><button class="log-del" data-del="nutrition" data-i="' + idx + '" aria-label="Remove">×</button></div>';
+      '<div class="log-title">' + fmtDate(d.date) +
+      (d.hasCal ? ' · ' + d.cal + ' kcal' : '') +
+      (d.hasPro ? ' · <span' + (meets ? ' style="color:var(--sand-deep)"' : '') + '>' +
+        d.pro + 'g protein</span>' : '') + '</div>' +
+      items + '</div></div>';
   }).join('');
 
   el.innerHTML =
     '<div class="stat-inline">' +
-      '<div><div class="k">Avg protein</div><div class="v">' + (avgP != null ? avgP + 'g' : '—') + '</div></div>' +
-      '<div><div class="k">Target</div><div class="v">' + (goal ? goal + 'g' : '—') + '</div></div>' +
-      '<div><div class="k">Avg calories</div><div class="v">' + (avgC != null ? avgC : '—') + '</div></div>' +
+      '<div><div class="k">Avg protein / day</div><div class="v">' + (avgP != null ? avgP + 'g' : '—') + '</div></div>' +
+      '<div><div class="k">Daily target</div><div class="v">' + (goal ? goal + 'g' : '—') + '</div></div>' +
+      '<div><div class="k">Days on target</div><div class="v">' +
+        (onTarget != null ? onTarget + '/' + proDays.length : '—') + '</div></div>' +
+      '<div><div class="k">Avg calories / day</div><div class="v">' + (avgC != null ? avgC : '—') + '</div></div>' +
     '</div>' + rows;
 }
 
@@ -899,6 +928,16 @@ function buildWorkouts() {
   if (!w.length) { el.innerHTML = '<p class="empty">Nothing recorded yet.</p>'; return; }
   const now = new Date();
   const week = w.filter(s => (now - new Date(s.date+'T00:00:00')) < 7*86400000).length;
+
+  /* Average per week across the whole span logged, floored at one week so a
+     few sessions on day one don't read as an implausible weekly rate. */
+  const firstDated = w.find(s => s.date);
+  let perWeek = null;
+  if (firstDated) {
+    const spanWeeks = Math.max(1, (now - new Date(firstDated.date+'T00:00:00')) / (7*86400000));
+    perWeek = (w.length / spanWeeks).toFixed(1).replace(/\.0$/,'');
+  }
+
   const rows = w.slice(-10).reverse().map(s => {
     const idx = DATA.workouts.indexOf(s);
     return '<div class="log-item"><div class="log-rule"></div><div class="log-main">' +
@@ -907,8 +946,10 @@ function buildWorkouts() {
       '<div class="log-meta">' + fmtDate(s.date) + (s.details ? ' · ' + esc(s.details) : '') + '</div>' +
       '</div><button class="log-del" data-del="workouts" data-i="' + idx + '" aria-label="Remove">×</button></div>';
   }).join('');
+
   el.innerHTML = '<div class="stat-inline">' +
     '<div><div class="k">This week</div><div class="v">' + week + '</div></div>' +
+    '<div><div class="k">Avg / week</div><div class="v">' + (perWeek != null ? perWeek : '—') + '</div></div>' +
     '<div><div class="k">Total</div><div class="v">' + w.length + '</div></div></div>' + rows;
 }
 
