@@ -134,9 +134,16 @@ button { cursor:pointer; border:none; background:none; }
 .sc-meta { display:flex; justify-content:space-between; gap:8px; font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
 
 .chart-wrap { position:relative; height:268px; }
-.chart-wrap-sm { height:150px; margin:4px 0 14px; }
 .chart-label { font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); margin:14px 0 2px; }
 .chart-label:first-child { margin-top:0; }
+/* Compact current-vs-goal indicator — reuses the same thin-bar look as the
+   stat-grid cards, just without their large headline number, so protein
+   and calories take a few lines each instead of a full chart's height. */
+.bar-row { margin:12px 0 4px; }
+.bar-row:first-of-type { margin-top:0; }
+.bar-row-label { display:flex; justify-content:space-between; align-items:baseline; margin:6px 0 5px; font-variant-numeric:tabular-nums; }
+.bar-row-label > span:first-child { font-size:19px; font-family:var(--display); letter-spacing:var(--display-ls); }
+.bar-row-goal { font-size:12.5px; color:var(--muted); }
 
 /* ── Forms ── */
 label.field { display:block; margin-bottom:14px; }
@@ -375,6 +382,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
         <option value="">Gender</option>
         <option value="M">Male</option>
         <option value="F">Female</option>
+        <option value="O">Other</option>
       </select></label>
     <div class="field-row">
       <label class="field"><span>Current weight (lb)</span>
@@ -418,6 +426,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 
     <!-- ── DASHBOARD ── -->
     <section class="view active" id="view-dash">
+            <div class="notice" id="getting-started" style="display:none"></div>
             <div class="notice warn" id="backup-nudge" style="display:none"></div>
 
       <div class="panel">
@@ -462,12 +471,18 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 
       <div class="panel">
         <div class="panel-header"><div class="panel-title">Nutrition</div><span class="panel-badge">Recent</span></div>
-        <div class="chart-label">Protein vs. goal</div>
-        <div class="chart-wrap chart-wrap-sm"><canvas id="proteinChart"></canvas></div>
-        <div id="protein-chart-empty" class="empty" style="display:none">Log a few meals to see your protein trend.</div>
-        <div class="chart-label">Calories vs. goal</div>
-        <div class="chart-wrap chart-wrap-sm"><canvas id="calorieChart"></canvas></div>
-        <div id="calorie-chart-empty" class="empty" style="display:none">Log a few meals to see your calorie trend.</div>
+        <div class="bar-row" id="protein-bar-row">
+          <div class="chart-label" style="margin:0">Protein vs. goal</div>
+          <div class="bar-row-label" id="protein-bar-label"></div>
+          <div class="sc-bar-bg"><div class="sc-bar-fill" id="protein-bar" style="width:0%"></div></div>
+        </div>
+        <div id="protein-bar-empty" class="empty" style="display:none">Log a meal to see today’s protein.</div>
+        <div class="bar-row" id="calorie-bar-row">
+          <div class="chart-label" style="margin:0">Calories vs. goal</div>
+          <div class="bar-row-label" id="calorie-bar-label"></div>
+          <div class="sc-bar-bg"><div class="sc-bar-fill" id="calorie-bar" style="width:0%"></div></div>
+        </div>
+        <div id="calorie-bar-empty" class="empty" style="display:none">Log a meal to see today’s calories.</div>
         <div id="nutrition-content"></div>
       </div>
 
@@ -538,6 +553,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
         </div>
         <label class="field"><span>Name</span><input type="text" id="s-name" placeholder="Your name"></label>
         <button class="btn btn-block" id="s-save-profile">Save</button>
+        <button class="btn btn-ghost btn-block btn-sm" id="s-show-tips" style="margin-top:9px">Show the getting-started tips again</button>
       </div>
 
       <div class="panel">
@@ -560,7 +576,8 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
         </div>
         <label class="field"><span>Sex (reference ranges)</span>
           <select id="s-sex"><option value="">Gender</option>
-          <option value="M">Male</option><option value="F">Female</option></select></label>
+          <option value="M">Male</option><option value="F">Female</option>
+          <option value="O">Other</option></select></label>
         <button class="btn btn-block" id="s-save-goals">Save</button>
       </div>
 
@@ -684,7 +701,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-28.9';
+const APP_VERSION = '2026-07-28.10';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
@@ -820,7 +837,7 @@ function blankData() {
     },
     refRanges: defaultRanges(''),
     bodyComposition:[], dexa:[], nutrition:[], workouts:[], labs:[],
-    settings:{ practiceCode:'', apiKey:'', model:'claude-sonnet-5', lastExportAt:null }
+    settings:{ practiceCode:'', apiKey:'', model:'claude-sonnet-5', lastExportAt:null, gettingStartedDismissed:false }
   };
 }
 
@@ -891,6 +908,28 @@ function updateBackupNudge() {
   el.innerHTML = msg + ' Your data only lives on this device. ' +
     '<a href="#" id="backup-nudge-export" class="nudge-link">Export now</a>';
 }
+
+/* First-run guidance shown on the Overview screen — the two things people
+   actually ask about early on: how logging works, and (since iOS never
+   prompts for this on its own) how to add the app to the home screen. One
+   card, dismissible for good, re-openable from Settings for anyone who
+   dismissed it before reading it. `navigator.standalone` is true once the
+   app is already launched from a home-screen icon, so that step drops out
+   for anyone who's already done it. */
+function updateGettingStartedCard() {
+  const el = $('getting-started');
+  if (!el) return;
+  if (DATA.settings.gettingStartedDismissed) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const alreadyInstalled = typeof navigator !== 'undefined' && navigator.standalone === true;
+  el.style.display = '';
+  el.innerHTML =
+    '<strong>New here?</strong> Log a meal or workout from the Add tab — type it, or tap the mic to ' +
+    'dictate it. Nothing saves until you’ve reviewed and confirmed it.' +
+    (alreadyInstalled ? '' :
+      ' To keep this on your phone like an app, tap the Share icon in Safari, then ' +
+      '<strong>Add to Home Screen</strong>.') +
+    ' <a href="#" id="getting-started-dismiss" class="nudge-link">Got it</a>';
+}
 function pct(cur, start, target) {
   if (cur == null || start == null || target == null || start === target) return 0;
   return Math.min(100, Math.max(0, ((start - cur) / (start - target)) * 100));
@@ -932,8 +971,6 @@ function rangeText(key) {
 
 /* ══════════════════ RENDER ══════════════════ */
 let chart = null;
-let proteinChart = null;
-let calorieChart = null;
 
 function render() {
   const g = DATA.goals, bc = DATA.bodyComposition;
@@ -1016,7 +1053,7 @@ function render() {
     : '';
 
   buildChart(); buildNutrition(); buildWorkouts(); buildLabs(); buildDexa(); updateStats();
-  updateBackupNudge(); refreshRecordButton();
+  updateBackupNudge(); updateGettingStartedCard(); refreshRecordButton();
 }
 
 function movingAvg(data, w) {
@@ -1089,127 +1126,20 @@ function buildChart() {
   });
 }
 
-/* Daily protein vs. goal — a trend is more forgiving to look at day-to-day
-   than a raw "days on target" streak, and it's the number Matt asked to see
-   as a chart. Mirrors buildChart()'s look, at a smaller scale. */
-function buildProteinChart(days, goal) {
-  const canvas = $('proteinChart');
-  if (!canvas) return;
-  const rows = days.filter(d => d.hasPro).slice(-30);
-  if (!rows.length) {
-    canvas.style.display='none'; $('protein-chart-empty').style.display='block';
-    if (proteinChart) { proteinChart.destroy(); proteinChart=null; } return;
-  }
-  canvas.style.display='block'; $('protein-chart-empty').style.display='none';
-  if (proteinChart) { proteinChart.destroy(); proteinChart=null; }
-
-  const grams = rows.map(d => Math.round(d.pro));
-  const ctx = canvas.getContext('2d');
-  const grad = ctx.createLinearGradient(0,0,0,150);
-  grad.addColorStop(0,'rgba(191,184,147,0.45)');
-  grad.addColorStop(1,'rgba(191,184,147,0.00)');
-
-  const sets = [
-    { label:'Protein', data:grams, borderColor:'rgba(0,0,0,0.16)', backgroundColor:grad,
-      borderWidth:1, pointRadius:2, pointBackgroundColor:'rgba(0,0,0,0.28)',
-      pointBorderColor:'transparent', pointHoverRadius:5,
-      pointHoverBackgroundColor:'#000', tension:0.25, fill:true, order:2 },
-  ];
-  if (goal != null) sets.push({
-    label:'Goal ' + goal + 'g', data:rows.map(()=>goal),
-    borderColor:'#bfb893', borderDash:[3,5], borderWidth:1.5, pointRadius:0, fill:false, order:1 });
-
-  proteinChart = new Chart(ctx, {
-    type:'line',
-    data:{ labels:rows.map(d => fmtDate(d.date)), datasets:sets },
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      interaction:{ mode:'index', intersect:false },
-      layout:{ padding:{ top:6, right:2 } },
-      plugins:{
-        legend:{ display:false },
-        tooltip:{ backgroundColor:'#0f120c', titleColor:'#f6f6ed', bodyColor:'#d6d0b4',
-          padding:12, cornerRadius:0, displayColors:false, borderColor:'rgba(191,184,147,0.35)',
-          borderWidth:1, titleFont:{family:'Newsreader',size:12},
-          bodyFont:{family:'Newsreader',size:13},
-          callbacks:{ label:c => c.dataset.label + ' · ' + c.parsed.y + 'g' } }
-      },
-      scales:{
-        x:{ ticks:{ color:'#8a8a7c', font:{ family:'Newsreader', size:11 },
-              maxTicksLimit:5, maxRotation:0, padding:6 },
-            grid:{ display:false }, border:{ color:'rgba(0,0,0,0.13)' } },
-        y:{ ticks:{ color:'#8a8a7c', font:{ family:'Newsreader', size:11 }, padding:8,
-              maxTicksLimit:4 },
-            grid:{ color:'rgba(0,0,0,0.045)', drawTicks:false },
-            border:{ display:false },
-            min: 0,
-            max: Math.max(goal || 0, ...grams) + 15 }
-      }
-    }
-  });
-}
-
-/* Daily calories vs. goal — same idea and look as buildProteinChart(), just
-   reading the calorie side of each day instead of the protein side. Kept as
-   a separate function (rather than parameterizing one) since the two are
-   independent enough — different field, different goal, different empty-
-   state copy — that a shared helper would need almost as many branches as
-   just writing it twice. */
-function buildCalorieChart(days, goal) {
-  const canvas = $('calorieChart');
-  if (!canvas) return;
-  const rows = days.filter(d => d.hasCal).slice(-30);
-  if (!rows.length) {
-    canvas.style.display='none'; $('calorie-chart-empty').style.display='block';
-    if (calorieChart) { calorieChart.destroy(); calorieChart=null; } return;
-  }
-  canvas.style.display='block'; $('calorie-chart-empty').style.display='none';
-  if (calorieChart) { calorieChart.destroy(); calorieChart=null; }
-
-  const kcal = rows.map(d => Math.round(d.cal));
-  const ctx = canvas.getContext('2d');
-  const grad = ctx.createLinearGradient(0,0,0,150);
-  grad.addColorStop(0,'rgba(191,184,147,0.45)');
-  grad.addColorStop(1,'rgba(191,184,147,0.00)');
-
-  const sets = [
-    { label:'Calories', data:kcal, borderColor:'rgba(0,0,0,0.16)', backgroundColor:grad,
-      borderWidth:1, pointRadius:2, pointBackgroundColor:'rgba(0,0,0,0.28)',
-      pointBorderColor:'transparent', pointHoverRadius:5,
-      pointHoverBackgroundColor:'#000', tension:0.25, fill:true, order:2 },
-  ];
-  if (goal != null) sets.push({
-    label:'Goal ' + goal + ' kcal', data:rows.map(()=>goal),
-    borderColor:'#bfb893', borderDash:[3,5], borderWidth:1.5, pointRadius:0, fill:false, order:1 });
-
-  calorieChart = new Chart(ctx, {
-    type:'line',
-    data:{ labels:rows.map(d => fmtDate(d.date)), datasets:sets },
-    options:{
-      responsive:true, maintainAspectRatio:false,
-      interaction:{ mode:'index', intersect:false },
-      layout:{ padding:{ top:6, right:2 } },
-      plugins:{
-        legend:{ display:false },
-        tooltip:{ backgroundColor:'#0f120c', titleColor:'#f6f6ed', bodyColor:'#d6d0b4',
-          padding:12, cornerRadius:0, displayColors:false, borderColor:'rgba(191,184,147,0.35)',
-          borderWidth:1, titleFont:{family:'Newsreader',size:12},
-          bodyFont:{family:'Newsreader',size:13},
-          callbacks:{ label:c => c.dataset.label + ' · ' + c.parsed.y + ' kcal' } }
-      },
-      scales:{
-        x:{ ticks:{ color:'#8a8a7c', font:{ family:'Newsreader', size:11 },
-              maxTicksLimit:5, maxRotation:0, padding:6 },
-            grid:{ display:false }, border:{ color:'rgba(0,0,0,0.13)' } },
-        y:{ ticks:{ color:'#8a8a7c', font:{ family:'Newsreader', size:11 }, padding:8,
-              maxTicksLimit:4 },
-            grid:{ color:'rgba(0,0,0,0.045)', drawTicks:false },
-            border:{ display:false },
-            min: 0,
-            max: Math.max(goal || 0, ...kcal) + 150 }
-      }
-    }
-  });
+/* Current-day (or most-recently-logged-day, if today is still empty) vs.
+   goal, as a thin horizontal bar — replaces what used to be a 30-day line
+   chart per nutrient. Matt asked for something that reads at a glance and
+   takes less vertical space, so this reuses the same .sc-bar look already
+   used for the weight/waist/VAT stat cards rather than a Chart.js canvas. */
+function buildNutrientBar(prefix, current, goal, fmt) {
+  const row = $(prefix + '-bar-row'), empty = $(prefix + '-bar-empty');
+  if (!row) return;
+  if (current == null) { row.style.display = 'none'; empty.style.display = 'block'; return; }
+  row.style.display = ''; empty.style.display = 'none';
+  const pct = goal ? Math.max(0, Math.min(100, Math.round(current / goal * 100))) : 0;
+  $(prefix + '-bar').style.width = pct + '%';
+  $(prefix + '-bar-label').innerHTML = '<span>' + fmt(current) + '</span>' +
+    '<span class="bar-row-goal">' + (goal != null ? 'of ' + fmt(goal) + ' goal' : 'no goal set') + '</span>';
 }
 
 function buildNutrition() {
@@ -1218,8 +1148,8 @@ function buildNutrition() {
   const calGoal = DATA.goals.calories_target;
   if (!n.length) {
     el.innerHTML = '<p class="empty">Nothing recorded yet.</p>';
-    buildProteinChart([], goal);
-    buildCalorieChart([], calGoal);
+    buildNutrientBar('protein', null, goal, v => v + 'g');
+    buildNutrientBar('calorie', null, calGoal, v => v + ' kcal');
     return;
   }
 
@@ -1236,8 +1166,9 @@ function buildNutrition() {
     d.items.push(r);
   });
   const list = [...days.values()].sort((a,b) => a.date.localeCompare(b.date));
-  buildProteinChart(list, goal);
-  buildCalorieChart(list, calGoal);
+  const latest = list[list.length - 1] || null;
+  buildNutrientBar('protein', latest && latest.hasPro ? Math.round(latest.pro) : null, goal, v => v + 'g');
+  buildNutrientBar('calorie', latest && latest.hasCal ? Math.round(latest.cal) : null, calGoal, v => v + ' kcal');
 
   const proDays = list.filter(d => d.hasPro);
   const avgP = proDays.length ? Math.round(proDays.reduce((a,b)=>a+b.pro,0)/proDays.length) : null;
@@ -1261,10 +1192,15 @@ function buildNutrition() {
         '</span></div>';
     }).join('');
     return '<div class="log-item"><div class="log-rule"></div><div class="log-main">' +
-      '<div class="log-title">' + fmtDate(d.date) +
+      '<div class="log-title" style="display:flex;justify-content:space-between;align-items:baseline;gap:8px">' +
+      '<span>' + fmtDate(d.date) +
       (d.hasCal ? ' · ' + d.cal + ' kcal' : '') +
       (d.hasPro ? ' · <span' + (meets ? ' style="color:var(--sand-deep)"' : '') + '>' +
-        d.pro + 'g protein</span>' : '') + '</div>' +
+        d.pro + 'g protein</span>' : '') + '</span>' +
+      '<button class="log-del" data-del-day="nutrition" data-date="' + d.date + '" ' +
+      'aria-label="Delete all of ' + fmtDate(d.date,true) + '\'s nutrition entries" ' +
+      'style="flex-shrink:0;font-size:12px;letter-spacing:.02em">Delete day</button>' +
+      '</div>' +
       items + '</div></div>';
   }).join('');
 
@@ -1405,11 +1341,20 @@ function updateStats() {
 
 /* ══════════════════ MODALS ══════════════════ */
 let modalSave = null;
-function openModal(title, sub, html, onSave) {
+/* `opts.confirmLabel`/`opts.danger` let a destructive confirmation (delete
+   a day's log, wipe all data) say what it actually does and look the part,
+   instead of every modal defaulting to a plain "Save" button. Both reset
+   on every call since the confirm button is one shared element reused by
+   every modal — a leftover danger style is the kind of thing that would go
+   unnoticed until it showed up on the wrong dialog. */
+function openModal(title, sub, html, onSave, opts) {
   $('modal-title').textContent = title;
   $('modal-sub').textContent = sub || '';
   $('modal-body').innerHTML = html;
   modalSave = onSave;
+  const confirmBtn = $('modal-confirm');
+  confirmBtn.textContent = (opts && opts.confirmLabel) || 'Save';
+  confirmBtn.classList.toggle('btn-danger', !!(opts && opts.danger));
   $('modal-bg').classList.add('show');
 }
 function closeModal(){ $('modal-bg').classList.remove('show'); modalSave = null; }
@@ -1544,6 +1489,16 @@ document.addEventListener('click', e => {
   if (!btn) return;
   e.preventDefault();
   $('d-export').click();
+});
+
+/* Dismissing the getting-started card is permanent (not per-session) —
+   re-openable from Settings via #s-show-tips for anyone who wants it back. */
+document.addEventListener('click', e => {
+  const btn = e.target.closest('#getting-started-dismiss');
+  if (!btn) return;
+  e.preventDefault();
+  DATA.settings.gettingStartedDismissed = true;
+  save(); updateGettingStartedCard();
 });
 
 /* Remove one parsed item from the multi-item confirm screen before saving —
@@ -2147,6 +2102,11 @@ $('s-save-profile').onclick = () => {
   save(); render(); fillSettings(); toast('Saved');
 };
 
+$('s-show-tips').onclick = () => {
+  DATA.settings.gettingStartedDismissed = false;
+  save(); render(); showView('dash'); toast('Tips are back at the top of Overview');
+};
+
 $('s-save-goals').onclick = () => {
   DATA.goals.weight_lbs.start = num($('s-wstart').value);
   DATA.goals.weight_lbs.target = num($('s-wtarget').value);
@@ -2243,7 +2203,28 @@ $('ob-import-file').onchange = e => { if (e.target.files[0]) handleImport(e.targ
 $('d-wipe').onclick = () => openModal('Delete everything?',
   'This permanently erases all data held on this device. It cannot be undone.',
   '<div class="notice warn">Export a backup first if there is any chance you will want this later.</div>',
-  () => { localStorage.removeItem(KEY); location.reload(); });
+  () => { localStorage.removeItem(KEY); location.reload(); },
+  { confirmLabel:'Delete everything', danger:true });
+
+/* Deleting a whole day's nutrition removes several entries in one action —
+   unlike the per-item [data-del] delete (one meal, easy to redo), this
+   isn't a quick "oops" to fix, so it goes through a confirmation modal
+   instead of firing immediately. */
+document.addEventListener('click', e => {
+  const btn = e.target.closest('[data-del-day]');
+  if (!btn) return;
+  const list = btn.dataset.delDay, date = btn.dataset.date;
+  const count = DATA[list].filter(r => r.date === date).length;
+  if (!count) return;
+  openModal('Delete this day’s nutrition?',
+    'This removes all ' + count + ' ' + (count === 1 ? 'entry' : 'entries') + ' logged for ' + fmtDate(date, true) + '. It cannot be undone.',
+    '',
+    () => {
+      DATA[list] = DATA[list].filter(r => r.date !== date);
+      save(); render(); toast('Day removed');
+    },
+    { confirmLabel:'Delete day', danger:true });
+});
 
 /* ══════════════════ SETUP WIZARD ══════════════════
    A plain-language walkthrough for people who have never seen an API key.
