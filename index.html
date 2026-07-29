@@ -292,6 +292,10 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
   vertical-align:-1px; margin-right:8px;
 }
 @keyframes spin { to { transform:rotate(360deg); } }
+.btn-ghost .spinner { border-color:rgba(0,0,0,.15); border-top-color:var(--text); }
+.rec-dot { display:inline-block; width:9px; height:9px; border-radius:50%; background:var(--flag);
+  margin-right:7px; vertical-align:0px; animation:rec-pulse 1s ease-in-out infinite; }
+@keyframes rec-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
 .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0,0,0,0); }
 .foot-note { font-size:12.5px; color:var(--muted); line-height:1.6; }
 
@@ -462,7 +466,9 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
       <div class="panel">
         <div class="panel-header"><div class="panel-title">Quick entry</div></div>
         <textarea id="nl-input" placeholder="Describe a meal or a workout — or your whole day at once.&#10;&#10;“Grilled chicken salad and an apple for lunch”&#10;“Eggs for breakfast, chicken and rice for lunch, salmon for dinner, and a 45 minute bike ride”"></textarea>
-        <div style="height:12px"></div>
+        <div style="height:10px"></div>
+        <button class="btn btn-ghost btn-block" id="nl-record" type="button" style="display:none">🎙 Record instead of typing</button>
+        <div style="height:10px"></div>
         <button class="btn btn-block" id="nl-parse">Interpret</button>
         <div class="hint" id="nl-hint"></div>
       </div>
@@ -639,7 +645,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-26.1';
+const APP_VERSION = '2026-07-28.1';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
@@ -968,7 +974,7 @@ function render() {
     : '';
 
   buildChart(); buildNutrition(); buildWorkouts(); buildLabs(); buildDexa(); updateStats();
-  updateBackupNudge();
+  updateBackupNudge(); refreshRecordButton();
 }
 
 function movingAvg(data, w) {
@@ -1390,6 +1396,95 @@ $('nl-parse').onclick = async () => {
   try { showConfirm(await runInference('text', text), text); }
   catch (err) { reportInferenceError(err, 'Could not interpret that — enter it directly'); }
   finally { btn.disabled = false; btn.textContent = 'Interpret'; }
+};
+
+/* ── Voice dictation. iOS's own dictation-in-a-web-app is unreliable, and
+   Claude's API has no audio input — so this records raw audio, sends it to
+   the practice's Worker for transcription (Whisper), and drops the plain
+   text into the same box "Interpret" already reads from. Scoped to
+   practice-code (proxy) mode only: transcription is billed to the practice
+   the same way text/image parsing is, so a patient never needs a second
+   key, but there has to be a code to bill it to. ── */
+const REC_MIME_CANDIDATES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
+const RECORD_MAX_MS = 3 * 60 * 1000;   // safety cap so a forgotten mic doesn't run forever
+
+function recordingSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
+}
+function pickRecMime() {
+  return REC_MIME_CANDIDATES.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
+}
+function refreshRecordButton() {
+  const btn = $('nl-record');
+  if (!btn) return;
+  btn.style.display = (recordingSupported() && inferenceMode() === 'proxy') ? '' : 'none';
+}
+
+let mediaRecorder = null, recChunks = [], recTimer = null, recStart = 0;
+
+async function startRecording() {
+  const mimeType = pickRecMime();
+  let stream;
+  try { stream = await navigator.mediaDevices.getUserMedia({ audio:true }); }
+  catch { toast('Microphone access was denied'); return; }
+
+  recChunks = [];
+  try {
+    mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+  } catch {
+    stream.getTracks().forEach(tr => tr.stop());
+    toast('Recording isn’t supported on this device — type it instead');
+    return;
+  }
+  mediaRecorder.ondataavailable = e => { if (e.data && e.data.size) recChunks.push(e.data); };
+  mediaRecorder.onstop = () => {
+    stream.getTracks().forEach(tr => tr.stop());
+    transcribeRecording(mediaRecorder.mimeType || mimeType || 'audio/webm');
+  };
+  mediaRecorder.start();
+  recStart = Date.now();
+
+  const btn = $('nl-record');
+  btn.classList.add('btn-danger');
+  btn.innerHTML = '<span class="rec-dot"></span>Stop — 0:00';
+  recTimer = setInterval(() => {
+    const s = Math.floor((Date.now() - recStart) / 1000);
+    btn.innerHTML = '<span class="rec-dot"></span>Stop — ' + Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+    if (Date.now() - recStart >= RECORD_MAX_MS) stopRecording();
+  }, 500);
+}
+
+function stopRecording() {
+  if (recTimer) { clearInterval(recTimer); recTimer = null; }
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+}
+
+async function transcribeRecording(mimeType) {
+  const btn = $('nl-record');
+  btn.classList.remove('btn-danger');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Transcribing…';
+  try {
+    if (!recChunks.length) throw new Error('No audio recorded — try again');
+    const blob = new Blob(recChunks, { type: mimeType });
+    const data = await fileToBase64(blob);
+    const result = await viaProxy('audio', { mediaType: mimeType, data });
+    const t = (result && result.text || '').trim();
+    if (!t) throw new Error('Didn’t catch that — try again, or type it instead');
+    const box = $('nl-input');
+    box.value = box.value.trim() ? box.value.trim() + '\n' + t : t;
+  } catch (err) {
+    reportInferenceError(err, 'Could not transcribe that — try again, or type it instead');
+  } finally {
+    recChunks = [];
+    btn.disabled = false;
+    btn.textContent = '🎙 Record instead of typing';
+  }
+}
+
+$('nl-record').onclick = () => {
+  if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
+  else startRecording();
 };
 
 function showConfirm(p, rawText) {
@@ -1819,6 +1914,7 @@ function fillSettings() {
   : PROXY_URL         ? 'Enter the code from your practice, or use your own Anthropic key.'
   :                     'Step by step, in plain language. Takes about five minutes.';
   buildRefEditor();
+  refreshRecordButton();
 }
 
 $('s-save-profile').onclick = () => {
