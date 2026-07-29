@@ -83,10 +83,20 @@ button { cursor:pointer; border:none; background:none; }
   white-space:nowrap; text-shadow:0 1px 12px rgba(0,0,0,0.55); padding-bottom:5px; letter-spacing:.01em; }
 
 /* ── Bottom nav ── */
+/* Solid background and an explicit compositing layer, deliberately.
+   This previously used backdrop-filter:blur(10px) over a 0.97-alpha cream,
+   which on iOS detached the bar mid-scroll: correct at the top of Overview,
+   then riding up to the middle of the screen and staying there while content
+   scrolled behind it. backdrop-filter on a position:fixed element forces
+   WebKit to recompute the blur against the scrolling content and it strands
+   the layer at a stale offset. At 0.97 alpha the blur was all but invisible,
+   so a solid fill is no real visual loss. translateZ(0) pins the bar to its
+   own layer so scrolling can't drag it along. Don't reintroduce the blur. */
 .nav {
   position:fixed; bottom:0; left:0; right:0; z-index:60; display:flex;
-  background:rgba(246,246,237,0.97); backdrop-filter:blur(10px);
+  background:var(--cream);
   border-top:1px solid var(--border); padding-bottom:env(safe-area-inset-bottom);
+  transform:translateZ(0); -webkit-transform:translateZ(0);
 }
 .nav button {
   flex:1; padding:11px 4px 13px; display:flex; flex-direction:column; align-items:center;
@@ -182,6 +192,9 @@ textarea { resize:vertical; min-height:96px; line-height:1.6; }
   display:flex; align-items:center; justify-content:center;
   box-shadow:0 4px 16px rgba(20,20,16,.28);
   transition:opacity .15s, background-color .15s;
+  /* Own compositing layer, same reasoning as .nav — this button was displaced
+     alongside the nav bar during the iOS mid-scroll detach. */
+  transform:translateZ(0); -webkit-transform:translateZ(0);
 }
 .fab-record svg { width:22px; height:22px; }
 .fab-record:active { opacity:.75; }
@@ -376,7 +389,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
     </div>
 
     <label class="field"><span>Name</span>
-      <input type="text" id="ob-name" placeholder="Your name" autocomplete="name"></label>
+      <input type="text" id="ob-name" placeholder="Your full name" autocomplete="name"></label>
     <label class="field"><span>Sex (for lab reference ranges)</span>
       <select id="ob-sex">
         <option value="">Gender</option>
@@ -552,7 +565,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
           on this device. <strong>Your data</strong> below is where you back up, restore, or
           permanently delete it.
         </div>
-        <label class="field"><span>Name</span><input type="text" id="s-name" placeholder="Your name"></label>
+        <label class="field"><span>Name</span><input type="text" id="s-name" placeholder="Your full name"></label>
         <button class="btn btn-block" id="s-save-profile">Save</button>
         <button class="btn btn-ghost btn-block btn-sm" id="s-show-tips" style="margin-top:9px">Show the getting-started tips again</button>
       </div>
@@ -702,7 +715,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-28.11';
+const APP_VERSION = '2026-07-28.12';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
@@ -976,10 +989,12 @@ let chart = null;
 function render() {
   const g = DATA.goals, bc = DATA.bodyComposition;
 
-  const first = DATA.profile.name ? DATA.profile.name.split(' ')[0] : '';
+  /* Full name as entered, not just the first word — this used to split on the
+     space and show only the given name. */
+  const who = (DATA.profile.name || '').trim();
   const d = daysUntil(DATA.profile.goalDate);
-  $('hdr-name').textContent = first;
-  $('hdr-days').textContent = d != null ? (first ? ' · ' : '') + d + ' days to goal' : '';
+  $('hdr-name').textContent = who;
+  $('hdr-days').textContent = d != null ? (who ? ' · ' : '') + d + ' days to goal' : '';
 
   const curWeight = latest(bc,'weight_lbs');
   const curWaist  = latest(bc,'waist_inches');
