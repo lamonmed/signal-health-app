@@ -357,8 +357,8 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
   <div class="hero">
     <div class="hero-inner">
       <h1><span class="sr-only">Signal Health Practice</span></h1>
-      <p class="tagline">Track the measures that matter — weight, body composition,
-         labs, nutrition and movement — over time.</p>
+      <p class="tagline">Track the metrics that signal change — Nutrition, Movement,
+         Body Composition, Sleep, &amp; Labs — over time.</p>
     </div>
   </div>
   <div class="onboard-wrap">
@@ -372,7 +372,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
       <input type="text" id="ob-name" placeholder="Your name" autocomplete="name"></label>
     <label class="field"><span>Sex (for lab reference ranges)</span>
       <select id="ob-sex">
-        <option value="">Prefer not to say</option>
+        <option value="">Gender</option>
         <option value="M">Male</option>
         <option value="F">Female</option>
       </select></label>
@@ -559,7 +559,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
           <label class="field"><span>Target date</span><input type="date" id="s-date"></label>
         </div>
         <label class="field"><span>Sex (reference ranges)</span>
-          <select id="s-sex"><option value="">Prefer not to say</option>
+          <select id="s-sex"><option value="">Gender</option>
           <option value="M">Male</option><option value="F">Female</option></select></label>
         <button class="btn btn-block" id="s-save-goals">Save</button>
       </div>
@@ -682,7 +682,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-28.6';
+const APP_VERSION = '2026-07-28.7';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
