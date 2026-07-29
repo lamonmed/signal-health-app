@@ -132,6 +132,7 @@ button { cursor:pointer; border:none; background:none; }
 .sc-meta { display:flex; justify-content:space-between; gap:8px; font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
 
 .chart-wrap { position:relative; height:268px; }
+.chart-wrap-sm { height:150px; margin:2px 0 14px; }
 
 /* ── Forms ── */
 label.field { display:block; margin-bottom:14px; }
@@ -160,16 +161,23 @@ textarea { resize:vertical; min-height:96px; line-height:1.6; }
 .btn-row { display:flex; gap:9px; flex-wrap:wrap; }
 .btn-row .btn { flex:1; min-width:130px; }
 
-.nl-record-row { display:flex; justify-content:flex-end; margin:9px 0 12px; }
-.btn-pill {
-  display:inline-flex; align-items:center; gap:6px;
-  padding:6px 15px; border-radius:999px; font-size:12.5px; letter-spacing:.01em;
-  background:transparent; color:var(--muted); border:1px solid var(--border);
-  transition:opacity .15s, border-color .15s, color .15s;
+.btn-ghost.is-recording { color:var(--flag); border-color:rgba(156,92,60,.4); }
+
+.fab-record {
+  position:fixed; right:calc(18px + env(safe-area-inset-right));
+  bottom:calc(76px + env(safe-area-inset-bottom));
+  width:54px; height:54px; border-radius:50%; z-index:150;
+  background:var(--text); color:var(--cream);
+  display:flex; align-items:center; justify-content:center;
+  box-shadow:0 4px 16px rgba(20,20,16,.28);
+  transition:opacity .15s, background-color .15s;
 }
-.btn-pill:active { opacity:.65; }
-.btn-pill:disabled { opacity:.5; cursor:default; }
-.btn-pill.is-recording { color:var(--flag); border-color:rgba(156,92,60,.4); }
+.fab-record svg { width:22px; height:22px; }
+.fab-record:active { opacity:.75; }
+.fab-record:disabled { opacity:.6; cursor:default; }
+.fab-record.is-recording { background:var(--flag); animation:rec-pulse-bg 1.1s ease-in-out infinite; }
+.fab-record .spinner { margin-right:0; }
+@keyframes rec-pulse-bg { 0%,100% { opacity:1; } 50% { opacity:.7; } }
 
 /* ── Tables ── */
 table { width:100%; border-collapse:collapse; }
@@ -303,7 +311,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
   vertical-align:-1px; margin-right:8px;
 }
 @keyframes spin { to { transform:rotate(360deg); } }
-.btn-ghost .spinner, .btn-pill .spinner { border-color:rgba(0,0,0,.15); border-top-color:var(--text); }
+.btn-ghost .spinner { border-color:rgba(0,0,0,.15); border-top-color:var(--text); }
 .rec-dot { display:inline-block; width:8px; height:8px; border-radius:50%; background:var(--flag);
   animation:rec-pulse 1s ease-in-out infinite; }
 @keyframes rec-pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
@@ -409,16 +417,6 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
             <div class="notice warn" id="backup-nudge" style="display:none"></div>
 
       <div class="panel">
-        <div class="panel-header"><div class="panel-title">Nutrition</div><span class="panel-badge">Recent</span></div>
-        <div id="nutrition-content"></div>
-      </div>
-
-      <div class="panel">
-        <div class="panel-header"><div class="panel-title">Movement</div><span class="panel-badge">Recent</span></div>
-        <div id="workout-content"></div>
-      </div>
-
-      <div class="panel">
         <div class="panel-header">
           <div><div class="panel-title">Weight</div><div class="panel-sub" id="chart-sub"></div></div>
           <span class="panel-badge">All time</span>
@@ -459,6 +457,18 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
       </div>
 
       <div class="panel">
+        <div class="panel-header"><div class="panel-title">Nutrition</div><span class="panel-badge">Recent</span></div>
+        <div class="chart-wrap chart-wrap-sm"><canvas id="proteinChart"></canvas></div>
+        <div id="protein-chart-empty" class="empty" style="display:none">Log a few meals to see your protein trend.</div>
+        <div id="nutrition-content"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><div class="panel-title">Movement</div><span class="panel-badge">Recent</span></div>
+        <div id="workout-content"></div>
+      </div>
+
+      <div class="panel">
         <div class="panel-header">
           <div><div class="panel-title">Laboratory</div>
           <div class="panel-sub">Values shown against reference ranges</div></div>
@@ -477,10 +487,10 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
       <div class="panel">
         <div class="panel-header"><div class="panel-title">Quick entry</div></div>
         <textarea id="nl-input" placeholder="Describe a meal or a workout — or your whole day at once.&#10;&#10;“Grilled chicken salad and an apple for lunch”&#10;“Eggs for breakfast, chicken and rice for lunch, salmon for dinner, and a 45 minute bike ride”"></textarea>
-        <div class="nl-record-row">
-          <button class="btn-pill" id="nl-record" type="button" style="display:none">Transcribe</button>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn btn-ghost" id="nl-record" type="button" style="display:none">Transcribe</button>
+          <button class="btn" id="nl-parse">Interpret</button>
         </div>
-        <button class="btn btn-block" id="nl-parse">Interpret</button>
         <div class="hint" id="nl-hint"></div>
       </div>
 
@@ -616,6 +626,13 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
     <button data-view="log"><span class="nav-icon">＋</span>Add</button>
     <button data-view="settings"><span class="nav-icon">≡</span>Settings</button>
   </nav>
+
+  <button class="fab-record" id="fab-record" type="button" style="display:none" aria-label="Quick transcribe">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor"/>
+      <path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </svg>
+  </button>
 </div>
 
 <!-- ══════════ SETUP WIZARD ══════════ -->
@@ -656,7 +673,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-28.2';
+const APP_VERSION = '2026-07-28.3';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
@@ -903,6 +920,7 @@ function rangeText(key) {
 
 /* ══════════════════ RENDER ══════════════════ */
 let chart = null;
+let proteinChart = null;
 
 function render() {
   const g = DATA.goals, bc = DATA.bodyComposition;
@@ -1058,10 +1076,74 @@ function buildChart() {
   });
 }
 
+/* Daily protein vs. goal — a trend is more forgiving to look at day-to-day
+   than a raw "days on target" streak, and it's the number Matt asked to see
+   as a chart. Mirrors buildChart()'s look, at a smaller scale. */
+function buildProteinChart(days, goal) {
+  const canvas = $('proteinChart');
+  if (!canvas) return;
+  const rows = days.filter(d => d.hasPro).slice(-30);
+  if (!rows.length) {
+    canvas.style.display='none'; $('protein-chart-empty').style.display='block';
+    if (proteinChart) { proteinChart.destroy(); proteinChart=null; } return;
+  }
+  canvas.style.display='block'; $('protein-chart-empty').style.display='none';
+  if (proteinChart) { proteinChart.destroy(); proteinChart=null; }
+
+  const grams = rows.map(d => Math.round(d.pro));
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createLinearGradient(0,0,0,150);
+  grad.addColorStop(0,'rgba(191,184,147,0.45)');
+  grad.addColorStop(1,'rgba(191,184,147,0.00)');
+
+  const sets = [
+    { label:'Protein', data:grams, borderColor:'rgba(0,0,0,0.16)', backgroundColor:grad,
+      borderWidth:1, pointRadius:2, pointBackgroundColor:'rgba(0,0,0,0.28)',
+      pointBorderColor:'transparent', pointHoverRadius:5,
+      pointHoverBackgroundColor:'#000', tension:0.25, fill:true, order:2 },
+  ];
+  if (goal != null) sets.push({
+    label:'Goal ' + goal + 'g', data:rows.map(()=>goal),
+    borderColor:'#bfb893', borderDash:[3,5], borderWidth:1.5, pointRadius:0, fill:false, order:1 });
+
+  proteinChart = new Chart(ctx, {
+    type:'line',
+    data:{ labels:rows.map(d => fmtDate(d.date)), datasets:sets },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      layout:{ padding:{ top:6, right:2 } },
+      plugins:{
+        legend:{ display:false },
+        tooltip:{ backgroundColor:'#0f120c', titleColor:'#f6f6ed', bodyColor:'#d6d0b4',
+          padding:12, cornerRadius:0, displayColors:false, borderColor:'rgba(191,184,147,0.35)',
+          borderWidth:1, titleFont:{family:'Newsreader',size:12},
+          bodyFont:{family:'Newsreader',size:13},
+          callbacks:{ label:c => c.dataset.label + ' · ' + c.parsed.y + 'g' } }
+      },
+      scales:{
+        x:{ ticks:{ color:'#8a8a7c', font:{ family:'Newsreader', size:11 },
+              maxTicksLimit:5, maxRotation:0, padding:6 },
+            grid:{ display:false }, border:{ color:'rgba(0,0,0,0.13)' } },
+        y:{ ticks:{ color:'#8a8a7c', font:{ family:'Newsreader', size:11 }, padding:8,
+              maxTicksLimit:4 },
+            grid:{ color:'rgba(0,0,0,0.045)', drawTicks:false },
+            border:{ display:false },
+            min: 0,
+            max: Math.max(goal || 0, ...grams) + 15 }
+      }
+    }
+  });
+}
+
 function buildNutrition() {
   const n = byDate(DATA.nutrition), el = $('nutrition-content');
   const goal = DATA.goals.protein_g_min;
-  if (!n.length) { el.innerHTML = '<p class="empty">Nothing recorded yet.</p>'; return; }
+  if (!n.length) {
+    el.innerHTML = '<p class="empty">Nothing recorded yet.</p>';
+    buildProteinChart([], goal);
+    return;
+  }
 
   /* Group by date first. The protein target is a daily one, so averaging
      across individual entries would divide a day's meals into fractions
@@ -1076,6 +1158,7 @@ function buildNutrition() {
     d.items.push(r);
   });
   const list = [...days.values()].sort((a,b) => a.date.localeCompare(b.date));
+  buildProteinChart(list, goal);
 
   const proDays = list.filter(d => d.hasPro);
   const avgP = proDays.length ? Math.round(proDays.reduce((a,b)=>a+b.pro,0)/proDays.length) : null;
@@ -1421,7 +1504,19 @@ $('nl-parse').onclick = () => interpretText($('nl-input').value.trim());
    key, but there has to be a code to bill it to. ── */
 const REC_MIME_CANDIDATES = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus'];
 const RECORD_MAX_MS = 3 * 60 * 1000;   // safety cap so a forgotten mic doesn't run forever
+const FAB_ICON_MIC = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+  '<rect x="9" y="2" width="6" height="12" rx="3" fill="currentColor"/>' +
+  '<path d="M5 11a7 7 0 0 0 14 0M12 18v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+const FAB_ICON_STOP = '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
+  '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/></svg>';
 
+/* Two entry points share one recording pipeline: the inline "Transcribe"
+   button in Quick Entry, and the floating button that's reachable from any
+   screen. Both call the same start/stop/transcribe logic below; only their
+   idle/recording/transcribing *display* differs (text vs. icon). */
+function recordButtons() {
+  return [$('nl-record'), $('fab-record')].filter(Boolean);
+}
 function recordingSupported() {
   return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder);
 }
@@ -1429,9 +1524,18 @@ function pickRecMime() {
   return REC_MIME_CANDIDATES.find(m => window.MediaRecorder && MediaRecorder.isTypeSupported(m)) || '';
 }
 function refreshRecordButton() {
-  const btn = $('nl-record');
-  if (!btn) return;
-  btn.style.display = (recordingSupported() && inferenceMode() === 'proxy') ? '' : 'none';
+  const show = recordingSupported() && inferenceMode() === 'proxy';
+  recordButtons().forEach(btn => { btn.style.display = show ? '' : 'none'; });
+}
+function setRecordUI(state, label) {
+  recordButtons().forEach(btn => {
+    const isFab = btn.id === 'fab-record';
+    btn.classList.toggle('is-recording', state === 'recording');
+    btn.disabled = state === 'transcribing';
+    if (state === 'idle')          btn.innerHTML = isFab ? FAB_ICON_MIC : 'Transcribe';
+    else if (state === 'recording')btn.innerHTML = isFab ? FAB_ICON_STOP : '<span class="rec-dot"></span>' + label;
+    else if (state === 'transcribing') btn.innerHTML = '<span class="spinner"></span>' + (isFab ? '' : label);
+  });
 }
 
 let mediaRecorder = null, recChunks = [], recTimer = null, recStart = 0;
@@ -1458,12 +1562,10 @@ async function startRecording() {
   mediaRecorder.start();
   recStart = Date.now();
 
-  const btn = $('nl-record');
-  btn.classList.add('is-recording');
-  btn.innerHTML = '<span class="rec-dot"></span>Stop · 0:00';
+  setRecordUI('recording', 'Stop · 0:00');
   recTimer = setInterval(() => {
     const s = Math.floor((Date.now() - recStart) / 1000);
-    btn.innerHTML = '<span class="rec-dot"></span>Stop · ' + Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+    setRecordUI('recording', 'Stop · ' + Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'));
     if (Date.now() - recStart >= RECORD_MAX_MS) stopRecording();
   }, 500);
 }
@@ -1474,10 +1576,7 @@ function stopRecording() {
 }
 
 async function transcribeRecording(mimeType) {
-  const btn = $('nl-record');
-  btn.classList.remove('is-recording');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Transcribing…';
+  setRecordUI('transcribing', 'Transcribing…');
   let text = null;
   try {
     if (!recChunks.length) throw new Error('No audio recorded — try again');
@@ -1493,17 +1592,18 @@ async function transcribeRecording(mimeType) {
     reportInferenceError(err, 'Could not transcribe that — try again, or type it instead');
   } finally {
     recChunks = [];
-    btn.disabled = false;
-    btn.textContent = 'Transcribe';
+    setRecordUI('idle');
   }
   /* A successful transcription goes straight into Interpret — no second tap. */
   if (text) await interpretText(text);
 }
 
-$('nl-record').onclick = () => {
-  if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
-  else startRecording();
-};
+recordButtons().forEach(btn => {
+  btn.onclick = () => {
+    if (mediaRecorder && mediaRecorder.state === 'recording') stopRecording();
+    else startRecording();
+  };
+});
 
 function showConfirm(p, rawText) {
   /* Accept either the new array shape or a lone object, for robustness. */
