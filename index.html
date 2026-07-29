@@ -520,10 +520,11 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
       <div class="panel">
         <div class="panel-header">
           <div><div class="panel-title">From a document</div>
-          <div class="panel-sub">PDF or screenshot — lab report, DEXA results, or a list of weigh-ins</div></div>
+          <div class="panel-sub">PDF or screenshot — lab report, DEXA results, or a list of weigh-ins.
+          A report that runs over several pages can be selected all at once and is read as one result.</div></div>
         </div>
-        <button class="btn btn-block" id="img-pick">Choose PDF or image</button>
-        <input type="file" id="img-file" accept="image/*,application/pdf,.pdf" class="sr-only">
+        <button class="btn btn-block" id="img-pick">Choose PDF or images</button>
+        <input type="file" id="img-file" accept="image/*,application/pdf,.pdf" multiple class="sr-only">
         <div class="hint" id="img-hint"></div>
       </div>
 
@@ -701,7 +702,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-28.10';
+const APP_VERSION = '2026-07-28.11';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
@@ -1274,9 +1275,12 @@ function buildLabs() {
     const idx = DATA.labs.indexOf(l);
     return '<th style="text-align:right"><div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">' +
       '<span>' + fmtDate(l.date) + '</span>' +
-      '<span style="display:flex">' +
-      '<button class="log-del" data-edit="labs" data-i="' + idx + '" aria-label="Edit ' + fmtDate(l.date,true) + ' results" style="font-size:14px">✎</button>' +
-      '<button class="log-del" data-del="labs" data-i="' + idx + '" aria-label="Remove ' + fmtDate(l.date,true) + ' results" style="font-size:14px">×</button>' +
+      /* Deliberate gap: these two sat flush against each other and a phone
+         mis-tap deleted a whole date's results. Edit and delete now have
+         separated tap targets, and delete confirms. */
+      '<span style="display:flex;gap:10px">' +
+      '<button class="log-del" data-edit="labs" data-i="' + idx + '" aria-label="Edit ' + fmtDate(l.date,true) + ' results" style="font-size:14px;padding:2px 5px">✎</button>' +
+      '<button class="log-del" data-del="labs" data-i="' + idx + '" data-confirm="' + fmtDate(l.date,true) + ' lab results" aria-label="Remove ' + fmtDate(l.date,true) + ' results" style="font-size:14px;padding:2px 5px">×</button>' +
       '</span></div></th>';
   }).join('');
 
@@ -1325,7 +1329,8 @@ function buildDexa() {
       return '<td>' + (v != null ? v + ' ' + u : '—') + '</td>';
     }).join('');
     return '<tr><td style="white-space:nowrap">' + fmtDate(s.date) + '</td>' + cells +
-      '<td style="text-align:right"><button class="log-del" data-del="dexa" data-i="' + idx + '">×</button></td></tr>';
+      '<td style="text-align:right"><button class="log-del" data-del="dexa" data-i="' + idx +
+      '" data-confirm="the ' + fmtDate(s.date,true) + ' DEXA scan" aria-label="Remove ' + fmtDate(s.date,true) + ' scan">×</button></td></tr>';
   }).join('');
   el.innerHTML = '<div class="scroll-x"><table><thead><tr><th>Date</th>' +
     f.map(x => '<th>' + x[1] + '</th>').join('') + '<th></th></tr></thead><tbody>' + rows + '</tbody></table></div>';
@@ -1464,9 +1469,22 @@ document.addEventListener('click', e => {
   const btn = e.target.closest('[data-del]');
   if (!btn) return;
   const list = btn.dataset.del, i = parseInt(btn.dataset.i,10);
-  if (DATA[list] && i >= 0 && i < DATA[list].length) {
-    DATA[list].splice(i,1); save(); render(); toast('Removed');
-  }
+  if (!(DATA[list] && i >= 0 && i < DATA[list].length)) return;
+  const doDelete = () => { DATA[list].splice(i,1); save(); render(); toast('Removed'); };
+
+  /* A single meal or workout is trivially re-entered, so those stay one-tap.
+     A lab panel or DEXA scan is a whole visit's results that can't be
+     reconstructed from memory — those get a confirmation step. Opt-in via
+     data-confirm rather than a hardcoded list, so the check travels with
+     whichever button is actually destructive.
+
+     This exists because the unconfirmed × added to the labs date header sat
+     a few pixels from the edit pencil and wiped a date's results on a phone
+     mis-tap, with no undo. Do not remove the confirmation from labs/dexa. */
+  const what = btn.dataset.confirm;
+  if (!what) { doDelete(); return; }
+  openModal('Delete ' + what + '?', 'This cannot be undone.', '', doDelete,
+    { confirmLabel:'Delete', danger:true });
 });
 
 /* Reopen an already-saved nutrition/workout/labs entry, prefilled, for
@@ -1810,6 +1828,10 @@ Return ONLY a JSON object, no markdown fences, no commentary:
 }
 
 Rules:
+- If several images or pages are provided, they are consecutive pages of ONE report, in order.
+  Read them together and return a SINGLE combined result, merging analytes across pages. The
+  collection date and header usually appear only on the first page — apply that date to values
+  read from later pages rather than returning null for them.
 - Transcribe only what is legibly printed. Never infer or fill in a value you cannot actually read. Use null.
 - "date" is the collection/scan date shown on the document, not today's date.
 - Convert units if needed: kg to lb (x2.205), cm to inches (/2.54). Note any conversion in "note".
@@ -1874,11 +1896,17 @@ async function viaProxy(kind, payload) {
 
 /* ── Route B: straight to Anthropic with the person's own key ── */
 async function viaDirect(kind, payload) {
+  /* Documents arrive either as a single source or as {pages:[...]} for a
+     report spanning several pages. Normalise to a list so both take the same
+     path — every page block first, then the prompt, so the model has seen the
+     whole report before it's told what to do with it. */
+  const pages = kind === 'text' ? null
+    : (Array.isArray(payload.pages) ? payload.pages : [payload]);
   const content = kind === 'text'
     ? [{ type:'text', text: PARSE_PROMPT + payload }]
-    : [{ type: payload.isPdf ? 'document' : 'image',
-         source:{ type:'base64', media_type:payload.mediaType, data:payload.data } },
-       { type:'text', text: VISION_PROMPT }];
+    : pages.map(p => ({ type: p.isPdf ? 'document' : 'image',
+         source:{ type:'base64', media_type:p.mediaType, data:p.data } }))
+       .concat([{ type:'text', text: VISION_PROMPT }]);
 
   const res = await fetch('https://api.anthropic.com/v1/messages', {
     method:'POST',
@@ -1924,22 +1952,48 @@ $('img-pick').onclick = () => {
   $('img-file').click();
 };
 
+/* A full lab panel usually runs to several pages, and the collection date and
+   patient header are typically only on page one — so the pages have to reach
+   the model together, in order, as a single request. Reading them one at a
+   time produced a separate half-empty record per page and lost the date on
+   every page but the first. Images are photographed in order, so file order
+   is page order. */
+const MAX_DOC_PAGES = 8;
+
 $('img-file').onchange = async e => {
-  const file = e.target.files[0];
+  const files = [...e.target.files];
   e.target.value = '';
-  if (!file) return;
-  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name || '');
-  if (!isPdf && !/^image\//.test(file.type)) { toast('Choose a PDF or an image'); return; }
+  if (!files.length) return;
+
+  const isPdfFile = f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
+  const bad = files.find(f => !isPdfFile(f) && !/^image\//.test(f.type));
+  if (bad) { toast('Choose PDFs or images only'); return; }
+  if (files.length > MAX_DOC_PAGES) {
+    toast('Up to ' + MAX_DOC_PAGES + ' pages at a time — send the rest separately');
+    return;
+  }
+  /* A multi-page PDF is already one document; combining several PDFs would
+     make page order ambiguous, so keep that to one file per go. */
+  if (files.length > 1 && files.some(isPdfFile)) {
+    toast('Select either one PDF, or several images — not both');
+    return;
+  }
 
   const btn = $('img-pick');
+  const original = btn.textContent;
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Reading ' + (isPdf ? 'PDF' : 'image') + '…';
+  btn.innerHTML = '<span class="spinner"></span>Reading ' +
+    (files.length > 1 ? files.length + ' pages' : (isPdfFile(files[0]) ? 'PDF' : 'image')) + '…';
   try {
-    showImageConfirm(await runInference('document', await prepareSource(file)));
+    const pages = [];
+    for (const f of files) pages.push(await prepareSource(f));
+    /* One page keeps the original single-source payload shape so it behaves
+       identically no matter which side (app or Worker) deployed first. */
+    showImageConfirm(await runInference('document', pages.length === 1 ? pages[0] : { pages }));
   } catch (err) {
     reportInferenceError(err, 'Could not read that file');
   } finally {
-    btn.disabled = false; btn.textContent = 'Choose PDF or image';
+    btn.disabled = false; btn.textContent = original;
   }
 };
 
