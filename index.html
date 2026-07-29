@@ -45,7 +45,8 @@ body {
   background:var(--bg); color:var(--text);
   font-family:var(--serif); font-size:16px; line-height:1.5;
   min-height:100vh; -webkit-font-smoothing:antialiased;
-  padding-bottom:calc(74px + env(safe-area-inset-bottom));
+  /* No nav clearance needed: the nav is a flow child of the #app-root shell
+     rather than a fixed overlay, so it no longer covers page content. */
 }
 button,input,select,textarea { font-family:inherit; font-size:16px; color:inherit; }
 button { cursor:pointer; border:none; background:none; }
@@ -83,20 +84,33 @@ button { cursor:pointer; border:none; background:none; }
   white-space:nowrap; text-shadow:0 1px 12px rgba(0,0,0,0.55); padding-bottom:5px; letter-spacing:.01em; }
 
 /* ── Bottom nav ── */
-/* Solid background and an explicit compositing layer, deliberately.
-   This previously used backdrop-filter:blur(10px) over a 0.97-alpha cream,
-   which on iOS detached the bar mid-scroll: correct at the top of Overview,
-   then riding up to the middle of the screen and staying there while content
-   scrolled behind it. backdrop-filter on a position:fixed element forces
-   WebKit to recompute the blur against the scrolling content and it strands
-   the layer at a stale offset. At 0.97 alpha the blur was all but invisible,
-   so a solid fill is no real visual loss. translateZ(0) pins the bar to its
-   own layer so scrolling can't drag it along. Don't reintroduce the blur. */
+/* ── App shell ──────────────────────────────────────────────────────────
+   The nav is NOT position:fixed, deliberately, and must not go back to it.
+
+   History: as position:fixed;bottom:0 it sat correctly at the top of Overview
+   then rode up to the middle of the screen and stayed there while content
+   scrolled behind it — but ONLY in the iOS home-screen (standalone) app. A
+   plain Safari tab was fine, with identical data, so it was never a layout or
+   content problem: it's standalone-mode viewport handling, where the layout
+   viewport iOS positions fixed elements against drifts out of step with what's
+   actually on screen. Removing backdrop-filter and forcing a compositing layer
+   did not fix it; only removing the dependency on fixed positioning does.
+
+   So the shell owns the viewport (position:fixed;inset:0) and the *content*
+   scrolls inside #app-scroll. The window itself never scrolls, which means
+   nothing can drift out of step with it. Overlays elsewhere may still use
+   position:fixed safely for the same reason. */
+#app-root {
+  position:fixed; inset:0; flex-direction:column; overflow:hidden;
+}
+#app-scroll {
+  flex:1 1 auto; overflow-y:auto; overflow-x:hidden;
+  -webkit-overflow-scrolling:touch; overscroll-behavior-y:contain;
+}
 .nav {
-  position:fixed; bottom:0; left:0; right:0; z-index:60; display:flex;
+  flex:0 0 auto; z-index:60; display:flex;
   background:var(--cream);
   border-top:1px solid var(--border); padding-bottom:env(safe-area-inset-bottom);
-  transform:translateZ(0); -webkit-transform:translateZ(0);
 }
 .nav button {
   flex:1; padding:11px 4px 13px; display:flex; flex-direction:column; align-items:center;
@@ -185,7 +199,9 @@ textarea { resize:vertical; min-height:96px; line-height:1.6; }
 .btn-ghost.is-recording { color:var(--flag); border-color:rgba(156,92,60,.4); }
 
 .fab-record {
-  position:fixed; right:calc(18px + env(safe-area-inset-right));
+  /* Absolute within the #app-root shell, not fixed to the viewport — same
+     reasoning as .nav. It was displaced alongside the nav bar on iOS. */
+  position:absolute; right:calc(18px + env(safe-area-inset-right));
   bottom:calc(76px + env(safe-area-inset-bottom));
   width:54px; height:54px; border-radius:50%; z-index:150;
   background:var(--text); color:var(--cream);
@@ -428,6 +444,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 
 <!-- ══════════ APP ══════════ -->
 <div id="app-root" style="display:none">
+ <div id="app-scroll">
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand"><span class="sr-only">Signal Health Practice</span></div>
@@ -662,6 +679,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
       </div>
     </section>
   </div>
+ </div><!-- /#app-scroll -->
 
   <nav class="nav">
     <button data-view="dash" class="active"><span class="nav-icon">▤</span>Overview</button>
@@ -715,7 +733,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-28.12';
+const APP_VERSION = '2026-07-28.13';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
@@ -2564,13 +2582,21 @@ function openWiz(step) {
   wizMode = PROXY_URL ? 'code' : 'key';
   renderWiz();
   $('wiz').classList.add('show');
-  window.scrollTo(0,0);
+  scrollAppTop();
 }
 function closeWiz() {
   $('wiz').classList.remove('show');
   fillSettings();
 }
 $('s-setup-wiz').onclick = () => openWiz(0);
+
+/* Scrolling lives on the shell's inner container, not the window. Guarded so
+   it's harmless before the shell exists (onboarding) and in tests. */
+function scrollAppTop() {
+  const el = $('app-scroll');
+  if (el) el.scrollTop = 0;
+  if (typeof window.scrollTo === 'function') window.scrollTo(0,0);
+}
 
 /* ══════════════════ NAV ══════════════════ */
 /* Switching tabs. Pulled out so a successful save can send you back to the
@@ -2580,7 +2606,9 @@ function showView(name) {
     x.classList.toggle('active', x.dataset.view === name));
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
   $('view-' + name).classList.add('active');
-  window.scrollTo(0,0);
+  /* Content scrolls inside the shell now, so reset that container rather than
+     the window — window.scrollTo is a no-op here. */
+  scrollAppTop();
   if (name === 'settings') fillSettings();
 }
 
@@ -2615,7 +2643,7 @@ $('ob-start').onclick = () => {
 /* ══════════════════ BOOT ══════════════════ */
 function start() {
   $('onboarding').style.display = 'none';
-  $('app-root').style.display = 'block';
+  $('app-root').style.display = 'flex';   // flex column shell, not block
   fillSettings(); render();
 }
 (function boot() {
