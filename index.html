@@ -75,13 +75,24 @@ button { cursor:pointer; border:none; background:none; }
 .brand {
   background-image:var(--logo); background-size:contain; background-repeat:no-repeat;
   background-position:left bottom;
-  height:clamp(26px,6.4vw,34px); aspect-ratio:5.696/1; width:auto; flex-shrink:0;
+  /* Larger now that the countdown has moved out of the hero and the logo no
+     longer competes with two pieces of text on one line. */
+  height:clamp(34px,8.6vw,46px); aspect-ratio:5.696/1; width:auto; flex-shrink:0;
   filter:drop-shadow(0 1px 10px rgba(0,0,0,0.45));
 }
-@media (min-width:760px){ .brand { height:38px; } }
+@media (min-width:760px){ .brand { height:50px; } }
 .brand .mark { color:var(--sand); }
+/* Name only — right-aligned opposite the logo. */
 .topbar-sub { font-size:13.5px; color:rgba(255,255,255,0.92); font-variant-numeric:tabular-nums;
-  white-space:nowrap; text-shadow:0 1px 12px rgba(0,0,0,0.55); padding-bottom:5px; letter-spacing:.01em; }
+  white-space:nowrap; text-shadow:0 1px 12px rgba(0,0,0,0.55); padding-bottom:5px; letter-spacing:.01em;
+  text-align:right; overflow:hidden; text-overflow:ellipsis; }
+/* Days-to-goal, relocated out of the hero to the top of Overview. Styled to
+   match .panel-badge so it reads as quiet metadata, not a third headline. */
+.goal-days {
+  text-align:right; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--muted); font-variant-numeric:tabular-nums; padding-top:16px;
+}
+.goal-days:empty { display:none; }
 
 /* ── Bottom nav ── */
 /* ── App shell ──────────────────────────────────────────────────────────
@@ -448,7 +459,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
   <header class="topbar">
     <div class="topbar-inner">
       <div class="brand"><span class="sr-only">Signal Health Practice</span></div>
-      <div class="topbar-sub"><span id="hdr-name"></span><span id="hdr-days"></span></div>
+      <div class="topbar-sub"><span id="hdr-name"></span></div>
     </div>
   </header>
 
@@ -458,6 +469,10 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
     <section class="view active" id="view-dash">
             <div class="notice" id="getting-started" style="display:none"></div>
             <div class="notice warn" id="backup-nudge" style="display:none"></div>
+
+      <!-- Countdown lives here rather than in the hero: the hero was carrying
+           logo + name + countdown on one line and reading as crowded. -->
+      <div class="goal-days" id="hdr-days"></div>
 
       <div class="panel">
         <div class="panel-header">
@@ -733,7 +748,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-28.13';
+const APP_VERSION = '2026-07-28.14';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
@@ -1012,7 +1027,9 @@ function render() {
   const who = (DATA.profile.name || '').trim();
   const d = daysUntil(DATA.profile.goalDate);
   $('hdr-name').textContent = who;
-  $('hdr-days').textContent = d != null ? (who ? ' · ' : '') + d + ' days to goal' : '';
+  /* Standalone on Overview now, so no leading separator to join it to the
+     name — it no longer sits beside it in the hero. */
+  $('hdr-days').textContent = d != null ? d + ' days to goal' : '';
 
   const curWeight = latest(bc,'weight_lbs');
   const curWaist  = latest(bc,'waist_inches');
