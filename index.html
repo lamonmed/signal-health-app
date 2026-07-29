@@ -132,7 +132,9 @@ button { cursor:pointer; border:none; background:none; }
 .sc-meta { display:flex; justify-content:space-between; gap:8px; font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums; }
 
 .chart-wrap { position:relative; height:268px; }
-.chart-wrap-sm { height:150px; margin:2px 0 14px; }
+.chart-wrap-sm { height:150px; margin:4px 0 14px; }
+.chart-label { font-size:11px; letter-spacing:.09em; text-transform:uppercase; color:var(--muted); margin:14px 0 2px; }
+.chart-label:first-child { margin-top:0; }
 
 /* ── Forms ── */
 label.field { display:block; margin-bottom:14px; }
@@ -458,8 +460,12 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
 
       <div class="panel">
         <div class="panel-header"><div class="panel-title">Nutrition</div><span class="panel-badge">Recent</span></div>
+        <div class="chart-label">Protein vs. goal</div>
         <div class="chart-wrap chart-wrap-sm"><canvas id="proteinChart"></canvas></div>
         <div id="protein-chart-empty" class="empty" style="display:none">Log a few meals to see your protein trend.</div>
+        <div class="chart-label">Calories vs. goal</div>
+        <div class="chart-wrap chart-wrap-sm"><canvas id="calorieChart"></canvas></div>
+        <div id="calorie-chart-empty" class="empty" style="display:none">Log a few meals to see your calorie trend.</div>
         <div id="nutrition-content"></div>
       </div>
 
@@ -547,11 +553,12 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
           <label class="field"><span>Daily protein (g)</span><input type="number" id="s-protein" inputmode="numeric"></label>
         </div>
         <div class="field-row">
+          <label class="field"><span>Daily calories</span><input type="number" id="s-calories" inputmode="numeric"></label>
           <label class="field"><span>Target date</span><input type="date" id="s-date"></label>
-          <label class="field"><span>Sex (reference ranges)</span>
-            <select id="s-sex"><option value="">Prefer not to say</option>
-            <option value="M">Male</option><option value="F">Female</option></select></label>
         </div>
+        <label class="field"><span>Sex (reference ranges)</span>
+          <select id="s-sex"><option value="">Prefer not to say</option>
+          <option value="M">Male</option><option value="F">Female</option></select></label>
         <button class="btn btn-block" id="s-save-goals">Save</button>
       </div>
 
@@ -673,7 +680,7 @@ tbody tr.lab-group:first-child td { padding-top:4px; }
    also pick this up, just less critically since a manual reload fixes it there.
    No service worker involved; this just periodically re-fetches this same
    page with the browser cache bypassed and compares versions. */
-const APP_VERSION = '2026-07-28.3';
+const APP_VERSION = '2026-07-28.4';
 let lastUpdateCheck = 0;
 async function checkForUpdate() {
   const now = Date.now();
@@ -804,7 +811,8 @@ function blankData() {
       weight_lbs:{ start:null, target:null },
       waist_inches:{ start:null, target:null },
       vat_kg:{ target:1.0 },
-      protein_g_min:150
+      protein_g_min:150,
+      calories_target:2200
     },
     refRanges: defaultRanges(''),
     bodyComposition:[], dexa:[], nutrition:[], workouts:[], labs:[],
@@ -921,6 +929,7 @@ function rangeText(key) {
 /* ══════════════════ RENDER ══════════════════ */
 let chart = null;
 let proteinChart = null;
+let calorieChart = null;
 
 function render() {
   const g = DATA.goals, bc = DATA.bodyComposition;
@@ -1136,12 +1145,77 @@ function buildProteinChart(days, goal) {
   });
 }
 
+/* Daily calories vs. goal — same idea and look as buildProteinChart(), just
+   reading the calorie side of each day instead of the protein side. Kept as
+   a separate function (rather than parameterizing one) since the two are
+   independent enough — different field, different goal, different empty-
+   state copy — that a shared helper would need almost as many branches as
+   just writing it twice. */
+function buildCalorieChart(days, goal) {
+  const canvas = $('calorieChart');
+  if (!canvas) return;
+  const rows = days.filter(d => d.hasCal).slice(-30);
+  if (!rows.length) {
+    canvas.style.display='none'; $('calorie-chart-empty').style.display='block';
+    if (calorieChart) { calorieChart.destroy(); calorieChart=null; } return;
+  }
+  canvas.style.display='block'; $('calorie-chart-empty').style.display='none';
+  if (calorieChart) { calorieChart.destroy(); calorieChart=null; }
+
+  const kcal = rows.map(d => Math.round(d.cal));
+  const ctx = canvas.getContext('2d');
+  const grad = ctx.createLinearGradient(0,0,0,150);
+  grad.addColorStop(0,'rgba(191,184,147,0.45)');
+  grad.addColorStop(1,'rgba(191,184,147,0.00)');
+
+  const sets = [
+    { label:'Calories', data:kcal, borderColor:'rgba(0,0,0,0.16)', backgroundColor:grad,
+      borderWidth:1, pointRadius:2, pointBackgroundColor:'rgba(0,0,0,0.28)',
+      pointBorderColor:'transparent', pointHoverRadius:5,
+      pointHoverBackgroundColor:'#000', tension:0.25, fill:true, order:2 },
+  ];
+  if (goal != null) sets.push({
+    label:'Goal ' + goal + ' kcal', data:rows.map(()=>goal),
+    borderColor:'#bfb893', borderDash:[3,5], borderWidth:1.5, pointRadius:0, fill:false, order:1 });
+
+  calorieChart = new Chart(ctx, {
+    type:'line',
+    data:{ labels:rows.map(d => fmtDate(d.date)), datasets:sets },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      layout:{ padding:{ top:6, right:2 } },
+      plugins:{
+        legend:{ display:false },
+        tooltip:{ backgroundColor:'#0f120c', titleColor:'#f6f6ed', bodyColor:'#d6d0b4',
+          padding:12, cornerRadius:0, displayColors:false, borderColor:'rgba(191,184,147,0.35)',
+          borderWidth:1, titleFont:{family:'Newsreader',size:12},
+          bodyFont:{family:'Newsreader',size:13},
+          callbacks:{ label:c => c.dataset.label + ' · ' + c.parsed.y + ' kcal' } }
+      },
+      scales:{
+        x:{ ticks:{ color:'#8a8a7c', font:{ family:'Newsreader', size:11 },
+              maxTicksLimit:5, maxRotation:0, padding:6 },
+            grid:{ display:false }, border:{ color:'rgba(0,0,0,0.13)' } },
+        y:{ ticks:{ color:'#8a8a7c', font:{ family:'Newsreader', size:11 }, padding:8,
+              maxTicksLimit:4 },
+            grid:{ color:'rgba(0,0,0,0.045)', drawTicks:false },
+            border:{ display:false },
+            min: 0,
+            max: Math.max(goal || 0, ...kcal) + 150 }
+      }
+    }
+  });
+}
+
 function buildNutrition() {
   const n = byDate(DATA.nutrition), el = $('nutrition-content');
   const goal = DATA.goals.protein_g_min;
+  const calGoal = DATA.goals.calories_target;
   if (!n.length) {
     el.innerHTML = '<p class="empty">Nothing recorded yet.</p>';
     buildProteinChart([], goal);
+    buildCalorieChart([], calGoal);
     return;
   }
 
@@ -1159,6 +1233,7 @@ function buildNutrition() {
   });
   const list = [...days.values()].sort((a,b) => a.date.localeCompare(b.date));
   buildProteinChart(list, goal);
+  buildCalorieChart(list, calGoal);
 
   const proDays = list.filter(d => d.hasPro);
   const avgP = proDays.length ? Math.round(proDays.reduce((a,b)=>a+b.pro,0)/proDays.length) : null;
@@ -1594,8 +1669,11 @@ async function transcribeRecording(mimeType) {
     recChunks = [];
     setRecordUI('idle');
   }
-  /* A successful transcription goes straight into Interpret — no second tap. */
-  if (text) await interpretText(text);
+  /* A successful transcription goes straight into Interpret — no second tap.
+     The FAB can be triggered from any tab, so land on the Add page (where
+     Quick Entry and the confirm screen live) rather than leaving the user
+     wherever they happened to be when they tapped record. */
+  if (text) { showView('log'); await interpretText(text); }
 }
 
 recordButtons().forEach(btn => {
@@ -2011,6 +2089,7 @@ function fillSettings() {
   $('s-waisttarget').value = g.waist_inches.target != null ? g.waist_inches.target : '';
   $('s-vat').value = g.vat_kg.target != null ? +vatLb(g.vat_kg.target).toFixed(1) : '';
   $('s-protein').value = g.protein_g_min != null ? g.protein_g_min : '';
+  $('s-calories').value = g.calories_target != null ? g.calories_target : '';
   $('s-date').value = DATA.profile.goalDate || '';
   $('s-sex').value = DATA.profile.sex || '';
   $('s-apikey').value = DATA.settings.apiKey || '';
@@ -2050,6 +2129,7 @@ $('s-save-goals').onclick = () => {
   { const lb = num($('s-vat').value);
     DATA.goals.vat_kg.target = lb == null ? null : +(lb / KG_TO_LB).toFixed(3); }
   DATA.goals.protein_g_min = num($('s-protein').value);
+  DATA.goals.calories_target = num($('s-calories').value);
   DATA.profile.goalDate = $('s-date').value || '';
   const prevSex = DATA.profile.sex;
   DATA.profile.sex = $('s-sex').value || '';
